@@ -2,7 +2,7 @@
 
 > Secure, browser-native exam proctoring using real-time AI face detection, object detection, and behavioral analysis. No installations, no plugins — runs entirely in the browser.
 
-![HexaMinds Banner](screenshots/exam-view.png)
+🚀 **[Live Demo](https://yedakenishanth.github.io/hexaminds-proctoring-system/)** | 📄 **[Setup Guide](SETUP.md)**
 
 ---
 
@@ -90,26 +90,25 @@ Everything runs client-side in the browser.
 ### Look Away Warning
 ![Look Away](screenshots/look-away.png)
 
-### Admin Violation Details
-![Admin View](screenshots/admin-violations.png)
-
 ---
 
 ## How To Run
 
-Since this is a single HTML file with no dependencies to install:
+### Option 1 — Live Demo (Recommended)
+👉 **[yedakenishanth.github.io/hexaminds-proctoring-system](https://yedakenishanth.github.io/hexaminds-proctoring-system/)**
+
+### Option 2 — Run Locally
 
 1. **Clone the repo**
    ```bash
-   git clone https://github.com/yourusername/hexaminds-proctoring-system.git
+   git clone https://github.com/yedakenishanth/hexaminds-proctoring-system.git
    cd hexaminds-proctoring-system
    ```
 
-2. **Open the file**
+2. **Serve locally** (camera requires localhost or https)
    ```bash
-   # Just open in any browser
-   open exam.html
-   # or double-click the file in your file explorer
+   python -m http.server 8000
+   # then open http://localhost:8000
    ```
 
 3. **Allow camera access** when the browser asks
@@ -120,12 +119,6 @@ Since this is a single HTML file with no dependencies to install:
    - Username: `hexaminds`
    - Password: `hexaminds123`
 
-> **Note:** Camera access requires either `localhost` or `https`. If opening directly as a file doesn't allow camera, serve it locally:
-> ```bash
-> python -m http.server 8000
-> # then open http://localhost:8000/exam.html
-> ```
-
 ---
 
 ## Project Structure
@@ -133,18 +126,28 @@ Since this is a single HTML file with no dependencies to install:
 ```
 hexaminds-proctoring-system/
 │
-├── exam.html              # Complete application (single file)
+├── index.html             # Main HTML entry point
+├── css/
+│   └── styles.css         # All application styles
+├── js/
+│   ├── state.js           # Global state variables
+│   ├── data.js            # Demo data / pre-populated students
+│   ├── particles.js       # Login background + waveform animation
+│   ├── suspicion.js       # Suspicion score system
+│   ├── auth.js            # Login + face verification
+│   ├── violations.js      # Violation logging system
+│   ├── student.js         # Student navigation + pages
+│   ├── exam.js            # Exam render + timer + submit
+│   ├── camera.js          # Camera + BlazeFace + COCO-SSD
+│   ├── proctor.js         # Exam monitoring + auto-submit
+│   ├── storage.js         # Persistent storage
+│   ├── admin.js           # Admin dashboard + PDF generation
+│   └── patches.js         # Enhanced features + fixes
+├── screenshots/           # README screenshots
 ├── README.md              # This file
-├── .gitignore             # Git ignore rules
-└── screenshots/           # Screenshots for README
-    ├── registration.png
-    ├── face-enrollment.png
-    ├── dashboard.png
-    ├── exam-normal.png
-    ├── tab-switch.png
-    ├── phone-detected.png
-    ├── look-away.png
-    └── admin-violations.png
+├── SETUP.md               # Detailed setup guide
+├── LICENSE                # MIT License
+└── .gitignore             # Git ignore rules
 ```
 
 ---
@@ -180,10 +183,16 @@ During COVID and post-COVID online exams, our college used third-party proctorin
 
 ---
 
+## License
+
+This project is licensed under the [MIT License](LICENSE).
+
+---
+
 ## Built By
 
-**Nishanth** — [RNSIT](https://www.rnsit.ac.in)  
-Connect on [LinkedIn](https://linkedin.com/in/yourprofile) | [GitHub](https://github.com/yourusername)
+**Nishanth Yedake** — [RNSIT](https://www.rnsit.ac.in)  
+Connect on [LinkedIn](https://www.linkedin.com/in/nishanth-yedake-69349a37b) | [GitHub](https://github.com/yedakenishanth)
 
 ---
 
