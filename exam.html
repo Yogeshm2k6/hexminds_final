@@ -1,0 +1,3678 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HexaMinds — AI Exam Proctoring</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<!-- TensorFlow.js + BlazeFace (face detection) + COCO-SSD (object/phone detection) -->
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/blazeface@0.0.7/dist/blazeface.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+/* ===== RESET + VARIABLES ===== */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#f6f7fb; --bg2:#f0f2f8; --bg3:#e8ecf4;
+  --surface:#ffffff; --surface2:#fafbff;
+  --border:#e2e8f0; --border2:#c8d0dc;
+  --cyan:#1a56db; --cyan2:#1a56db; --cyan-glow:rgba(26,86,219,0.2);
+  --blue:#4f46e5; --blue-glow:rgba(79,70,229,0.2);
+  --green:#16a34a; --green-glow:rgba(22,163,74,0.2); --green-dim:rgba(22,163,74,0.08);
+  --red:#dc2626; --red-glow:rgba(220,38,38,0.2); --red-dim:rgba(220,38,38,0.06);
+  --amber:#d97706; --amber-dim:rgba(217,119,6,0.08);
+  --purple:#7c3aed;
+  --text:#111827; --text2:#374151; --text3:#9ca3af;
+  --white:#fff;
+  --radius:10px; --radius-lg:16px; --radius-xl:22px;
+}
+body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;font-size:14px;overflow-x:hidden}
+::selection{background:rgba(26,86,219,0.15);color:#111}
+
+/* Scrollbar */
+::-webkit-scrollbar{width:5px}
+::-webkit-scrollbar-track{background:#f0f2f8}
+::-webkit-scrollbar-thumb{background:rgba(26,86,219,0.2);border-radius:4px}
+
+/* ===== INPUTS ===== */
+input,select,textarea{
+  font-family:inherit;font-size:13px;outline:none;width:100%;
+  border:1.5px solid var(--border);border-radius:var(--radius);
+  padding:11px 14px;background:#fff;color:var(--text);
+  transition:border-color .2s,box-shadow .2s;
+}
+input::placeholder{color:var(--text3)}
+input:focus,select:focus{
+  border-color:var(--cyan);
+  box-shadow:0 0 0 3px var(--cyan-glow);
+}
+
+/* ===== BUTTONS ===== */
+button{font-family:inherit;font-size:13px;cursor:pointer;border:none;border-radius:var(--radius);padding:9px 18px;font-weight:600;transition:all .2s}
+.btn-primary{
+  background:#111827;
+  color:#fff;letter-spacing:.2px;
+  box-shadow:0 2px 8px rgba(17,24,39,0.2);
+}
+.btn-primary:hover{transform:translateY(-2px);box-shadow:0 6px 18px rgba(17,24,39,0.28);background:#374151}
+.btn-primary:active{transform:translateY(0)}
+.btn-outline{background:#fff;color:#111827;border:1.5px solid var(--border);transition:all .2s}
+.btn-outline:hover{background:#f4f6fa;border-color:var(--border2)}
+.btn-danger{background:var(--red-dim);color:var(--red);border:1px solid rgba(220,38,38,0.2)}
+.btn-danger:hover{background:rgba(220,38,38,0.12)}
+.btn-sm{padding:6px 14px;font-size:12px}
+.hidden{display:none!important}
+
+/* ===== CARDS ===== */
+.card{
+  background:#fff;
+  border:1.5px solid var(--border);
+  border-radius:var(--radius-lg);
+  padding:20px;
+  transition:border-color .2s,box-shadow .2s;
+}
+.card:hover{border-color:var(--border2);box-shadow:0 4px 20px rgba(0,0,0,0.07)}
+
+/* ===== BADGES ===== */
+.badge{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:30px;font-size:11px;font-weight:700;letter-spacing:.2px}
+.badge-green{background:#dcfce7;color:#15803d}
+.badge-red{background:#fee2e2;color:#dc2626}
+.badge-amber{background:#fef3c7;color:#b45309}
+.badge-gray{background:#f1f5f9;color:#555}
+.badge-blue{background:#dbeafe;color:#1e40af}
+.badge-live{background:#fee2e2;color:#dc2626;animation:livePulse 1.4s ease infinite}
+.badge-cyan{background:#dbeafe;color:#1d4ed8}
+
+/* ===== LAYOUT ===== */
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;padding:9px 14px;text-align:left;border-bottom:1.5px solid var(--border);background:#fafbff}
+td{padding:12px 14px;border-bottom:1px solid #f1f5f9;color:var(--text2)}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:#fafbff}
+.stat-card{
+  background:#fff;border:1.5px solid var(--border);border-radius:var(--radius-lg);
+  padding:20px;transition:all .25s;position:relative;overflow:hidden;
+}
+.stat-card::before{
+  content:'';position:absolute;top:0;left:0;right:0;height:2px;
+  background:linear-gradient(90deg,transparent,var(--cyan),transparent);
+  opacity:0;transition:opacity .3s;
+}
+.stat-card:hover{transform:translateY(-4px);box-shadow:0 10px 30px rgba(0,0,0,0.08);border-color:var(--border2)}
+.stat-card:hover::before{opacity:1}
+.stat-label{font-size:10px;color:var(--text3);margin-bottom:8px;font-weight:700;text-transform:uppercase;letter-spacing:.6px}
+.stat-value{font-size:30px;font-weight:800;letter-spacing:-1.5px;color:#111827;font-family:'JetBrains Mono',monospace}
+.stat-sub{font-size:11px;color:var(--text3);margin-top:5px}
+.stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:22px}
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+
+/* ===== TOPNAV ===== */
+.topnav{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:0 22px;height:56px;
+  background:#fff;
+  border-bottom:1.5px solid var(--border);
+  box-shadow:0 1px 6px rgba(0,0,0,0.04);
+  position:sticky;top:0;z-index:100;
+}
+.logo{display:flex;align-items:center;gap:12px;font-size:18px;font-weight:900;letter-spacing:-.5px;color:#111827;font-family:'DM Sans',sans-serif}
+.logo-icon{
+  width:34px;height:34px;
+  background:linear-gradient(135deg,#1c1c2e,#3a3a6e);
+  border-radius:10px;display:flex;align-items:center;justify-content:center;
+  color:#fff;font-size:11px;font-weight:900;letter-spacing:-.5px;
+  box-shadow:0 2px 8px rgba(28,28,46,0.3);font-family:'DM Sans',sans-serif;
+}
+.logo span{color:#111827;-webkit-text-fill-color:#111827;background:none}
+
+/* ===== SIDEBAR ===== */
+.main-layout{display:flex}
+.sidebar{
+  width:220px;min-height:calc(100vh - 56px);
+  background:#fff;
+  border-right:1.5px solid var(--border);
+  padding:16px 10px;display:flex;flex-direction:column;gap:3px;
+}
+.si{
+  display:flex;align-items:center;gap:10px;
+  padding:10px 14px;border-radius:10px;cursor:pointer;
+  color:#4b5563;font-size:13px;font-weight:600;
+  transition:all .2s;position:relative;
+}
+.si:hover{background:#f4f6fa;color:#111827;transform:translateX(4px)}
+.si.active{
+  background:#111827;
+  color:#fff;
+  box-shadow:0 2px 12px rgba(17,24,39,0.2);
+}
+.si.active::before{
+  content:'';position:absolute;left:0;top:20%;bottom:20%;width:3px;
+  background:#fff;border-radius:0 3px 3px 0;
+}
+.si-icon{font-size:16px;width:20px;text-align:center}
+.si-label{font-size:9px;font-weight:800;color:var(--text3);letter-spacing:1px;text-transform:uppercase;padding:14px 14px 5px}
+.content{flex:1;padding:26px;min-height:calc(100vh - 56px);background:var(--bg)}
+
+/* ===== PAGE HEADINGS ===== */
+.page-title{font-size:22px;font-weight:800;letter-spacing:-.5px;color:#111827;margin-bottom:5px;font-family:'DM Sans',sans-serif}
+.page-sub{font-size:13px;color:var(--text3);margin-bottom:24px}
+.section-title{font-size:13px;font-weight:700;color:#111827;margin-bottom:16px;letter-spacing:.2px}
+.divider{height:1.5px;background:#f0f4ff;margin:16px 0}
+.form-label{font-size:11px;font-weight:700;color:#4b5563;display:block;margin-bottom:7px;letter-spacing:.3px;text-transform:uppercase}
+.form-group{margin-bottom:16px}
+.avatar{
+  width:34px;height:34px;border-radius:50%;
+  background:#111827;
+  color:#fff;display:flex;align-items:center;justify-content:center;
+  font-size:11px;font-weight:800;letter-spacing:.2px;
+  box-shadow:0 2px 8px rgba(17,24,39,0.2);
+}
+
+/* ===== LIVE INDICATORS ===== */
+.live-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--green);animation:blink .9s infinite;vertical-align:middle}
+
+/* ===== FORM ELEMENTS ===== */
+.viol-row{
+  display:flex;align-items:flex-start;gap:12px;
+  padding:14px;border-radius:12px;
+  border:1.5px solid #f1f5f9;background:#fff;
+  margin-bottom:8px;transition:all .15s;
+}
+.viol-row:hover{border-color:#e2e8f0;box-shadow:0 2px 8px rgba(0,0,0,0.05)}
+.viol-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;margin-top:5px}
+
+/* ===== LOGIN PAGE ===== */
+.login-page{
+  min-height:100vh;position:relative;overflow:hidden;
+  display:flex;align-items:center;justify-content:center;padding:20px;
+  background:linear-gradient(135deg,#f0f4ff 0%,#f6f7fb 45%,#f0fff4 100%);
+  background-size:200% 200%;animation:gradBg 8s ease infinite;
+}
+#login-canvas{position:absolute;inset:0;z-index:0;opacity:0.3}
+.login-box{
+  position:relative;z-index:10;
+  background:#fff;
+  border:1.5px solid #e2e8f0;
+  border-radius:28px;
+  padding:42px 38px;
+  width:440px;
+  box-shadow:0 12px 50px rgba(0,0,0,0.09);
+  animation:cardEntrance .6s cubic-bezier(.16,1,.3,1);
+  transition:all .3s ease;
+}
+.login-logo{text-align:center;margin-bottom:32px}
+.logo-icon-xl{
+  width:70px;height:70px;
+  background:linear-gradient(135deg,#1c1c2e,#3a3a6e);
+  border-radius:20px;
+  display:flex;align-items:center;justify-content:center;
+  color:#fff;font-size:18px;font-weight:900;
+  margin:0 auto 16px;
+  box-shadow:0 8px 28px rgba(28,28,46,0.32);
+  font-family:'DM Sans',sans-serif;letter-spacing:-1px;
+}
+.logo-title{font-size:26px;font-weight:900;letter-spacing:-.5px;font-family:'DM Sans',sans-serif;color:#111827;margin-bottom:6px}
+.logo-sub{font-size:12px;color:var(--text3);font-weight:500;letter-spacing:.3px}
+.role-tabs{display:flex;border:1.5px solid #e2e8f0;border-radius:12px;margin-bottom:26px;overflow:hidden;background:#f6f7fb;padding:3px;gap:3px}
+.role-tab{flex:1;padding:11px;text-align:center;cursor:pointer;font-size:13px;font-weight:700;color:#6b7280;background:transparent;transition:all .25s;border-radius:10px}
+.role-tab.active{background:#111827;color:#fff;box-shadow:0 2px 8px rgba(17,24,39,0.25)}
+
+/* ===== FACE VERIFICATION ===== */
+#face-verify-overlay{
+  position:fixed;inset:0;z-index:10000;
+  background:rgba(246,247,251,0.97);
+  display:flex;align-items:center;justify-content:center;padding:20px;
+}
+.fv-box{
+  background:#fff;
+  border:1.5px solid #e2e8f0;
+  border-radius:28px;
+  padding:40px 36px;width:480px;
+  box-shadow:0 12px 50px rgba(0,0,0,0.1);
+  animation:cardEntrance .55s cubic-bezier(.16,1,.3,1);text-align:center;
+}
+.fv-cam-ring{
+  width:210px;height:210px;border-radius:50%;
+  border:3px solid #e2e8f0;
+  overflow:hidden;margin:0 auto 20px;position:relative;
+  background:#f6f7fb;
+  display:flex;align-items:center;justify-content:center;
+  transition:border-color .35s,box-shadow .35s;
+}
+.fv-cam-ring.scanning{
+  border-color:var(--cyan);
+  box-shadow:0 0 0 6px rgba(26,86,219,0.08),0 0 30px rgba(26,86,219,0.15);
+  animation:fvScan 2s ease infinite;
+}
+.fv-cam-ring.success{
+  border-color:var(--green);
+  box-shadow:0 0 0 6px rgba(22,163,74,0.1),0 0 20px rgba(22,163,74,0.15);
+}
+.fv-cam-ring.fail{
+  border-color:var(--red);
+  box-shadow:0 0 0 6px var(--red-dim),0 0 20px var(--red-glow);
+  animation:glowRed 1.2s infinite;
+}
+.fv-cam-ring video,.fv-cam-ring img.fv-capture{width:100%;height:100%;object-fit:cover;border-radius:50%}
+/* Scan line overlay on face ring */
+.fv-scan-overlay{
+  position:absolute;inset:0;border-radius:50%;
+  background:linear-gradient(180deg,transparent 0%,rgba(26,86,219,0.1) 50%,transparent 100%);
+  background-size:100% 60px;
+  animation:scanLine 2s linear infinite;
+  pointer-events:none;
+  display:none;
+}
+.fv-cam-ring.scanning .fv-scan-overlay{display:block}
+/* Grid overlay on face ring */
+.fv-grid-overlay{
+  position:absolute;inset:0;border-radius:50%;
+  background-image:linear-gradient(rgba(26,86,219,0.04) 1px,transparent 1px),linear-gradient(90deg,rgba(26,86,219,0.04) 1px,transparent 1px);
+  background-size:20px 20px;
+  pointer-events:none;
+}
+/* Corner brackets on face ring */
+.fv-corner{position:absolute;width:22px;height:22px;border-color:#1a56db;border-style:solid;pointer-events:none;opacity:0;transition:opacity .3s}
+.fv-cam-ring.scanning .fv-corner{opacity:1}
+.fv-corner.tl{top:8px;left:8px;border-width:2px 0 0 2px}
+.fv-corner.tr{top:8px;right:8px;border-width:2px 2px 0 0}
+.fv-corner.bl{bottom:8px;left:8px;border-width:0 0 2px 2px}
+.fv-corner.br{bottom:8px;right:8px;border-width:0 2px 2px 0}
+.fv-face-overlay{
+  position:absolute;inset:0;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  font-size:52px;
+}
+.fv-status{font-size:13px;font-weight:600;color:#4b5563;margin:0 0 16px;min-height:20px;letter-spacing:.2px}
+.fv-progress{height:3px;background:#e2e8f0;border-radius:4px;margin:0 0 20px;overflow:hidden}
+.fv-progress-bar{height:100%;background:linear-gradient(90deg,#1a56db,#4f46e5);border-radius:4px;width:0%;transition:width .35s ease}
+.fv-step-label{font-size:10px;font-weight:700;color:var(--text3);letter-spacing:.8px;text-transform:uppercase;margin-bottom:20px}
+
+/* ===== CAMERA FEED (Exam) ===== */
+.cam-feed{
+  width:100%;aspect-ratio:4/3;
+  background:#f6f7fb;border:1.5px solid var(--border);
+  border-radius:var(--radius-lg);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  overflow:hidden;position:relative;
+  transition:border-color .3s,box-shadow .3s;
+}
+.cam-feed img.cam-stream,.cam-feed video.cam-stream{width:100%;height:100%;object-fit:cover;border-radius:12px;display:block}
+.cam-feed.alert{border-color:var(--red)!important;animation:glowRed 1.2s infinite}
+.cam-feed.phone-detected{border-color:var(--purple)!important;animation:glowPurple 1.2s infinite}
+.rec-dot{position:absolute;top:10px;right:10px;width:10px;height:10px;border-radius:50%;background:#dc2626;animation:blink 1.2s infinite;z-index:5}
+/* Camera scan grid overlay */
+.cam-grid{
+  position:absolute;inset:0;border-radius:12px;
+  background-image:linear-gradient(rgba(26,86,219,0.03) 1px,transparent 1px),linear-gradient(90deg,rgba(26,86,219,0.03) 1px,transparent 1px);
+  background-size:32px 32px;
+  pointer-events:none;z-index:2;
+}
+/* Camera corner brackets */
+.cam-corner{position:absolute;width:18px;height:18px;border-color:#1a56db;border-style:solid;opacity:0.35;pointer-events:none;z-index:3}
+.cam-corner.tl{top:6px;left:6px;border-width:2px 0 0 2px}
+.cam-corner.tr{top:6px;right:6px;border-width:2px 2px 0 0}
+.cam-corner.bl{bottom:6px;left:6px;border-width:0 0 2px 2px}
+.cam-corner.br{bottom:6px;right:6px;border-width:0 2px 2px 0}
+.cam-viol-bar{
+  position:absolute;top:0;left:0;right:0;
+  padding:9px 12px;font-size:11px;font-weight:800;
+  color:#fff;text-align:center;
+  letter-spacing:1.5px;text-transform:uppercase;
+  z-index:20;display:none;
+  animation:redSweep 1s infinite;
+  text-shadow:0 1px 4px rgba(0,0,0,0.5);
+}
+.cam-viol-bar.visible{display:block}
+.face-count-badge{
+  position:absolute;bottom:10px;left:10px;
+  background:rgba(0,0,0,0.75);
+  color:#fff;font-size:10px;font-weight:700;
+  padding:4px 10px;border-radius:20px;
+  z-index:5;
+  display:none;border:1px solid rgba(255,255,255,0.2);
+}
+.face-count-badge.visible{display:block}
+
+/* ===== SUSPICION SCORE GAUGE ===== */
+.suspicion-gauge-wrap{position:relative;width:120px;height:120px;margin:0 auto 12px}
+.suspicion-gauge-wrap svg{transform:rotate(-90deg)}
+.suspicion-gauge-bg{stroke:rgba(26,86,219,0.1);fill:none;stroke-width:8}
+.suspicion-gauge-fill{fill:none;stroke-width:8;stroke-linecap:round;transition:stroke-dashoffset .8s cubic-bezier(.4,0,.2,1),stroke .5s}
+.suspicion-label{
+  position:absolute;inset:0;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;text-align:center;
+}
+.suspicion-pct{font-size:22px;font-weight:800;font-family:'JetBrains Mono',monospace;line-height:1}
+.suspicion-tag{font-size:9px;text-transform:uppercase;letter-spacing:.8px;color:var(--text3);margin-top:3px}
+
+/* ===== WAVEFORM (Monitoring) ===== */
+.waveform-wrap{padding:8px 0;overflow:hidden;position:relative}
+#waveform-canvas{width:100%;height:36px;display:block;opacity:0.7}
+
+/* ===== VIOLATION TOAST ===== */
+.viol-toast{
+  position:fixed;top:70px;right:20px;z-index:9999;
+  background:#fff;
+  border:1.5px solid #fecaca;
+  border-radius:18px;padding:18px 20px;width:360px;
+  box-shadow:0 8px 30px rgba(0,0,0,0.1),0 0 20px rgba(220,38,38,0.08);
+  animation:toastSlide .45s cubic-bezier(.16,1,.3,1);
+  border-left:4px solid var(--red);
+}
+
+/* ===== PROCTOR BAR ===== */
+.proctor-bar{
+  display:flex;align-items:center;gap:10px;padding:11px 16px;
+  background:#fef2f2;
+  border:1.5px solid #fecaca;
+  border-radius:12px;font-size:12px;color:#dc2626;
+  margin-bottom:18px;font-weight:700;transition:all .3s;
+  letter-spacing:.2px;
+}
+.proctor-bar.escalated{animation:glowRed 1.2s infinite;background:#fee2e2}
+
+/* ===== EXAM ELEMENTS ===== */
+.q-block{
+  background:#fff;border:1.5px solid var(--border);
+  border-radius:var(--radius-lg);padding:22px;margin-bottom:14px;
+  transition:border-color .2s;
+}
+.q-block:hover{border-color:var(--border2)}
+.q-opt{
+  display:flex;align-items:center;gap:12px;padding:12px 16px;
+  border-radius:12px;border:1.5px solid var(--border);cursor:pointer;
+  font-size:13px;color:#374151;margin-bottom:8px;transition:all .15s;
+  background:#fff;
+}
+.q-opt:hover{border-color:#94a3b8;background:#fafbff;color:#111827;transform:translateX(4px)}
+.q-opt.sel{border-color:#1a56db;background:#eff6ff;color:#1e40af}
+.q-opt.correct{border-color:#16a34a;background:#f0fdf4;color:#15803d}
+.q-opt.wrong{border-color:#dc2626;background:#fef2f2;color:#dc2626}
+.q-radio{width:18px;height:18px;border-radius:50%;border:2px solid currentColor;flex-shrink:0;display:flex;align-items:center;justify-content:center}
+.q-radio-in{width:8px;height:8px;border-radius:50%;background:currentColor;display:none}
+.q-opt.sel .q-radio-in{display:block}
+.q-nav-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:5px}
+.q-nav-btn{
+  aspect-ratio:1;border-radius:8px;
+  background:#f4f6fa;border:1.5px solid var(--border);
+  font-size:12px;font-weight:700;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;color:#9ca3af;transition:all .15s;
+}
+.q-nav-btn:hover{border-color:#1a56db;color:#1a56db}
+.q-nav-btn.answered{background:#111827;color:#fff;border-color:transparent;box-shadow:0 2px 8px rgba(17,24,39,0.2)}
+.timer-display{font-size:28px;font-weight:800;letter-spacing:3px;font-family:'JetBrains Mono',monospace;color:#111827}
+.timer-warn{color:var(--amber)}
+.timer-danger{color:var(--red);animation:blink .8s infinite}
+.py-notice{
+  background:#f0fdf4;
+  border:1.5px solid #bbf7d0;
+  border-radius:10px;padding:10px 14px;font-size:11px;color:#15803d;margin-top:8px;font-weight:600;
+}
+.viol-detail-card{
+  background:#fef2f2;
+  border:1.5px solid #fecaca;
+  border-radius:12px;padding:14px 16px;margin-bottom:10px;
+}
+#auto-submit-banner{
+  position:fixed;top:0;left:0;right:0;z-index:9998;
+  background:linear-gradient(90deg,#7c3aed,#dc2626);
+  color:#fff;text-align:center;padding:14px 20px;
+  font-size:14px;font-weight:800;letter-spacing:.3px;
+  animation:redSweep 0.9s infinite;display:none;
+  box-shadow:0 4px 20px rgba(220,38,38,0.3);
+}
+#auto-submit-banner.visible{display:block}
+
+/* ===== ANIMATIONS ===== */
+@keyframes fadeInUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.2}}
+@keyframes livePulse{0%,100%{opacity:1}50%{opacity:.6}}
+@keyframes glowRed{0%,100%{box-shadow:0 0 0 0 rgba(220,38,38,0)}60%{box-shadow:0 0 20px 4px rgba(220,38,38,0.2)}}
+@keyframes glowPurple{0%,100%{box-shadow:0 0 0 0 rgba(124,58,237,0)}60%{box-shadow:0 0 20px 4px rgba(124,58,237,0.2)}}
+@keyframes toastSlide{from{opacity:0;transform:translateX(110%)}to{opacity:1;transform:translateX(0)}}
+@keyframes redSweep{0%,100%{background:linear-gradient(90deg,#7c3aed,#dc2626)}50%{background:linear-gradient(90deg,#dc2626,#7c3aed)}}
+@keyframes shake{0%,100%{transform:translateX(0)}20%,60%{transform:translateX(-6px)}40%,80%{transform:translateX(6px)}}
+@keyframes cardEntrance{from{opacity:0;transform:translateY(20px) scale(.97)}to{opacity:1;transform:translateY(0) scale(1)}}
+@keyframes fvScan{0%,100%{box-shadow:0 0 0 4px rgba(26,86,219,0.06)}50%{box-shadow:0 0 0 10px rgba(26,86,219,0.1),0 0 30px rgba(26,86,219,0.12)}}
+@keyframes scanLine{0%{background-position:0% -60px}100%{background-position:0% 210px}}
+@keyframes gradBg{0%,100%{background-position:0% 50%}50%{background-position:100% 50%}}
+@keyframes hexFloat{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}
+@keyframes waveAnim{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+@keyframes pulseGlow{0%,100%{opacity:0.5}50%{opacity:1}}
+@keyframes violationShake{0%,100%{transform:none}10%,30%,50%,70%,90%{transform:translateX(-3px)}20%,40%,60%,80%{transform:translateX(3px)}}
+@keyframes scoreUp{from{transform:scale(1.3);opacity:0}to{transform:scale(1);opacity:1}}
+@keyframes dataStream{from{background-position:0 0}to{background-position:0 -40px}}
+@keyframes cyberBorder{0%{border-color:rgba(26,86,219,0.2)}50%{border-color:rgba(26,86,219,0.5)}100%{border-color:rgba(26,86,219,0.2)}}
+
+.anim-fade-up{animation:fadeInUp .45s cubic-bezier(.16,1,.3,1) both}
+.anim-fade{animation:fadeIn .35s ease both}
+.page-enter{animation:fadeInUp .4s cubic-bezier(.16,1,.3,1) both}
+.delay-1{animation-delay:.05s}.delay-2{animation-delay:.1s}.delay-3{animation-delay:.15s}.delay-4{animation-delay:.2s}
+
+/* Data stream bg for monitoring active */
+.data-stream-bg{
+  background-image:repeating-linear-gradient(0deg,transparent,transparent 38px,rgba(26,86,219,0.02) 38px,rgba(26,86,219,0.02) 39px);
+  animation:dataStream 2s linear infinite;
+}
+
+/* Cyber card with glow border animation */
+.cyber-card{animation:cyberBorder 3s ease infinite}
+
+/* Glow text */
+.glow-text{text-shadow:0 0 20px currentColor}
+
+/* ===== AUDIO MONITOR (Simulated) ===== */
+.audio-bars{display:flex;align-items:flex-end;gap:2px;height:20px}
+.audio-bar{
+  width:4px;border-radius:2px;
+  background:var(--green);
+  animation:audioBar var(--dur,0.6s) ease-in-out infinite alternate;
+}
+@keyframes audioBar{from{height:4px}to{height:var(--h,16px)}}
+
+/* Suspicion level colors */
+.susp-low{color:var(--green)}
+.susp-medium{color:var(--amber)}
+.susp-high{color:var(--red)}
+.susp-stroke-low{stroke:var(--green)}
+.susp-stroke-medium{stroke:var(--amber)}
+.susp-stroke-high{stroke:var(--red)}
+
+/* Violation flash overlay */
+.violation-flash{position:fixed;inset:0;z-index:9997;background:rgba(220,38,38,0.06);pointer-events:none;display:none;animation:fadeIn .1s ease}
+
+/* Copy-paste warning */
+.cp-warn{
+  position:fixed;bottom:20px;left:50%;transform:translateX(-50%);
+  background:#d97706;color:#fff;font-weight:800;
+  padding:10px 24px;border-radius:30px;font-size:13px;z-index:9999;
+  animation:fadeInUp .3s ease;letter-spacing:.3px;
+  box-shadow:0 4px 16px rgba(217,119,6,0.35);
+}
+</style>
+</head>
+<body>
+<div id="root">
+<canvas id="login-canvas"></canvas>
+
+<!-- ============ LOGIN ============ -->
+<div id="login-page" class="login-page">
+  <div class="login-box">
+    <div class="login-logo">
+      <div class="logo-icon-xl">HM</div>
+      <div class="logo-title">HEXAMINDS</div>
+      <p class="logo-sub">Secure AI-Powered Exam Proctoring</p>
+    </div>
+    <div class="role-tabs">
+      <div class="role-tab active" id="tab-student" onclick="setRole('student')">👤 &nbsp;Student</div>
+      <div class="role-tab" id="tab-admin" onclick="setRole('admin')">🛡 &nbsp;Admin</div>
+    </div>
+    <!-- Student fields -->
+    <div id="student-fields">
+      <!-- Student sub-tabs: Register / Login -->
+      <div style="display:flex;border:1.5px solid var(--border);border-radius:10px;margin-bottom:22px;overflow:hidden;background:var(--bg2);padding:3px;gap:3px">
+        <div id="stab-register" class="role-tab active" onclick="setStudentTab('register')" style="flex:1;padding:9px;font-size:12px;border-radius:8px">✨ &nbsp;Register</div>
+        <div id="stab-login"    class="role-tab"        onclick="setStudentTab('login')"    style="flex:1;padding:9px;font-size:12px;border-radius:8px">🔑 &nbsp;Login</div>
+      </div>
+
+      <!-- REGISTER PANEL -->
+      <div id="student-register-panel">
+        <div style="font-size:12px;color:var(--text3);margin-bottom:16px;text-align:center;line-height:1.6;background:rgba(26,86,219,0.05);border:1px solid rgba(26,86,219,0.12);border-radius:10px;padding:10px 14px">
+          👤 New student? Fill in your details below and capture your face to create an account.
+        </div>
+        <div class="form-group">
+          <label class="form-label">Full Name</label>
+          <input id="r-name" placeholder="Enter your full name" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Date of Birth</label>
+          <input id="r-dob" type="date" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">College / Institution</label>
+          <input id="r-college" placeholder="e.g. RNSIT College" />
+        </div>
+        <div id="reg-err" class="hidden" style="font-size:12px;color:#f87171;margin-bottom:12px;padding:10px 14px;background:rgba(239,68,68,0.1);border-radius:10px;border:1px solid rgba(239,68,68,0.3);font-weight:600"></div>
+        <button class="btn-primary" style="width:100%;padding:13px;font-size:14px;letter-spacing:.5px" onclick="studentRegister()">
+          CREATE ACCOUNT → FACE CAPTURE
+        </button>
+      </div>
+
+      <!-- LOGIN PANEL -->
+      <div id="student-login-panel" class="hidden">
+        <div style="font-size:12px;color:var(--text3);margin-bottom:16px;text-align:center;line-height:1.6;background:rgba(22,163,74,0.05);border:1px solid rgba(22,163,74,0.15);border-radius:10px;padding:10px 14px">
+          🔒 Already registered? Enter your name and date of birth to verify with face recognition.
+        </div>
+        <div class="form-group">
+          <label class="form-label">Full Name</label>
+          <input id="s-name" placeholder="Enter your registered name" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Date of Birth</label>
+          <input id="s-dob" type="date" />
+        </div>
+        <div id="login-stu-err" class="hidden" style="font-size:12px;color:#f87171;margin-bottom:12px;padding:10px 14px;background:rgba(239,68,68,0.1);border-radius:10px;border:1px solid rgba(239,68,68,0.3);font-weight:600"></div>
+        <button class="btn-primary" style="width:100%;padding:13px;font-size:14px;letter-spacing:.5px" onclick="studentLogin()">
+          LOGIN → FACE VERIFICATION
+        </button>
+        <div style="font-size:11px;color:var(--text3);text-align:center;margin-top:12px">
+          No account yet? <span style="color:var(--cyan);cursor:pointer;font-weight:700" onclick="setStudentTab('register')">Register here →</span>
+        </div>
+      </div>
+    </div>
+    <!-- Admin fields -->
+    <div id="admin-fields" class="hidden">
+      <div class="form-group">
+        <label class="form-label">Admin Username</label>
+        <input id="a-user" placeholder="Enter username" autocomplete="new-password" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">Password</label>
+        <input id="a-pass" type="password" placeholder="Enter password" autocomplete="new-password" />
+      </div>
+      <div id="login-err" class="hidden" style="font-size:12px;color:#f87171;margin-bottom:12px;padding:10px 14px;background:rgba(239,68,68,0.1);border-radius:10px;border:1px solid rgba(239,68,68,0.3);font-weight:600">
+        ⚠ Invalid credentials. Please try again.
+      </div>
+      <button class="btn-primary" style="width:100%;padding:13px;font-size:14px;letter-spacing:.5px" onclick="adminLogin()">
+        SIGN IN AS ADMIN →
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ AUTO-SUBMIT BANNER ============ -->
+<div id="auto-submit-banner"></div>
+
+<!-- ============ VIOLATION FLASH ============ -->
+<div class="violation-flash" id="viol-flash"></div>
+
+<!-- ============ FACE VERIFICATION OVERLAY ============ -->
+<div id="face-verify-overlay" class="hidden">
+  <div class="fv-box">
+    <div class="login-logo" style="margin-bottom:22px">
+      <div class="logo-icon-xl" style="width:50px;height:50px;font-size:14px;margin-bottom:12px">HM</div>
+      <div style="font-size:20px;font-weight:900;letter-spacing:1.5px;font-family:'Orbitron',monospace;background:linear-gradient(135deg,var(--cyan),#fff);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text" id="fv-title">Face Verification</div>
+      <div class="fv-step-label" id="fv-step-label" style="margin-top:4px">Step 2 of 2</div>
+    </div>
+    <div class="fv-cam-ring" id="fv-cam-ring">
+      <video id="fv-video" autoplay muted playsinline style="display:none;width:100%;height:100%;object-fit:cover;border-radius:50%"></video>
+      <div class="fv-scan-overlay"></div>
+      <div class="fv-grid-overlay"></div>
+      <div class="fv-corner tl"></div>
+      <div class="fv-corner tr"></div>
+      <div class="fv-corner bl"></div>
+      <div class="fv-corner br"></div>
+      <div class="fv-face-overlay" id="fv-overlay-icon">👤</div>
+    </div>
+    <div class="fv-progress"><div class="fv-progress-bar" id="fv-bar"></div></div>
+    <div class="fv-status" id="fv-status">Initializing camera…</div>
+    <div style="display:flex;gap:10px;justify-content:center">
+      <button class="btn-outline" id="fv-back-btn" onclick="fvCancel()" style="min-width:110px">← Back</button>
+      <button class="btn-primary" id="fv-action-btn" onclick="fvAction()" style="min-width:150px" disabled>Please wait…</button>
+    </div>
+    <div id="fv-error" style="display:none;margin-top:14px;font-size:12px;color:#f87171;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:10px;padding:10px 14px;font-weight:600;animation:shake .35s ease"></div>
+  </div>
+</div>
+
+<!-- ============ VIOLATION TOAST ============ -->
+<div id="viol-toast" class="viol-toast hidden">
+  <div style="display:flex;align-items:flex-start;gap:12px">
+    <div style="font-size:26px;flex-shrink:0;line-height:1;animation:hexFloat 1s ease infinite">⚠️</div>
+    <div style="flex:1">
+      <div id="vt-title" style="font-size:14px;font-weight:800;color:#f87171;margin-bottom:5px;letter-spacing:-.1px"></div>
+      <div id="vt-msg" style="font-size:12px;color:var(--text2);line-height:1.6"></div>
+      <div id="vt-count" style="font-size:11px;color:var(--text3);margin-top:8px;font-weight:700;font-family:'JetBrains Mono',monospace"></div>
+    </div>
+    <button onclick="closeToast()" style="background:none;border:none;font-size:18px;color:var(--text3);cursor:pointer;padding:0;line-height:1;flex-shrink:0">✕</button>
+  </div>
+</div>
+
+<!-- ============ STUDENT APP ============ -->
+<div id="student-app" class="hidden">
+  <div class="topnav">
+    <div class="logo">
+      <div class="logo-icon">HM</div>
+      <span>Hexa<span>Minds</span></span>
+    </div>
+    <div style="display:flex;align-items:center;gap:14px">
+      <span class="live-dot"></span>
+      <span style="font-size:12px;color:var(--text3);font-weight:500" id="s-nav-name"></span>
+      <div class="avatar" id="s-nav-av">S</div>
+      <button class="btn-outline btn-sm" onclick="logout()">Logout</button>
+    </div>
+  </div>
+  <div class="main-layout">
+    <div class="sidebar">
+      <div class="si-label">Student Portal</div>
+      <div class="si active" id="si-sdash" onclick="sNav('sdash',this)"><span class="si-icon">⊞</span> Dashboard</div>
+      <div class="si" id="si-sjoin" onclick="sNav('sjoin',this)"><span class="si-icon">◈</span> Join Exam</div>
+      <div class="si" id="si-sresults" onclick="sNav('sresults',this)"><span class="si-icon">△</span> My Results</div>
+      <div class="si-label">Account</div>
+      <div class="si" onclick="logout()"><span class="si-icon">◁</span> Logout</div>
+    </div>
+    <div class="content" id="s-content"></div>
+  </div>
+</div>
+
+<!-- ============ ADMIN APP ============ -->
+<div id="admin-app" class="hidden">
+  <div class="topnav">
+    <div class="logo">
+      <div class="logo-icon">HM</div>
+      <span>Hexa<span>Minds</span></span>
+      <span style="font-size:10px;font-weight:700;color:var(--text3);margin-left:6px;padding:3px 10px;background:rgba(56,189,248,0.1);border-radius:20px;border:1px solid var(--border2);letter-spacing:.5px">ADMIN</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:14px">
+      <span class="live-dot"></span>
+      <span style="font-size:12px;color:var(--text3);font-weight:500">Command Center</span>
+      <div class="avatar" style="background:linear-gradient(135deg,var(--blue),var(--cyan2))">AD</div>
+      <button class="btn-outline btn-sm" onclick="logout()">Logout</button>
+    </div>
+  </div>
+  <div class="main-layout">
+    <div class="sidebar">
+      <div class="si-label">Command Center</div>
+      <div class="si active" id="si-adash" onclick="aNav('adash',this)"><span class="si-icon">⊞</span> Dashboard</div>
+      <div class="si" id="si-astudents" onclick="aNav('astudents',this)"><span class="si-icon">◈</span> Students</div>
+      <div class="si" id="si-aviolations" onclick="aNav('aviolations',this)"><span class="si-icon">△</span> Violations</div>
+      <div class="si" id="si-aexams" onclick="aNav('aexams',this)"><span class="si-icon">□</span> Exams</div>
+      <div class="si" id="si-areports" onclick="aNav('areports',this)"><span class="si-icon">▲</span> Reports</div>
+      <div class="si" id="si-aloginhistory" onclick="aNav('aloginhistory',this)"><span class="si-icon">🕐</span> Login History</div>
+      <div class="si" id="si-amonitor" onclick="aNav('amonitor',this)"><span class="si-icon">👁</span> Live Monitor</div>
+    </div>
+    <div class="content" id="a-content"></div>
+  </div>
+</div>
+
+</div><!-- #root -->
+
+<script>
+/* =====================================================
+   HEXAMINDS — GLOBAL STATE
+   All camera detection via browser getUserMedia + Face Detection API
+   Violations limit: 2 → auto-submit (STRICT MODE)
+===================================================== */
+var role = 'student';
+var currentStudent = {};
+var examAnswers = {};
+var examTimer = null;
+var examTimeLeft = 3600;
+var camStream = null;
+var examRecorder = null;
+var examRecChunks = [];
+var examRecBlobUrl = null;
+var faceLoopInterval = null;
+var examActive = false;
+var violationCount = 0;
+var lastBlurTime = 0;
+var lastFaceState = 'normal';
+var sessionViolations = [];
+var toastTimeout = null;
+var noFaceConsecutive = 0;
+var noFaceWarningCount = 0;        /* 0 = never warned, 1 = warned once → 2nd triggers auto-submit */
+var multipleFacesAutoSubmitted = false; /* prevent re-triggering multiple-face auto-submit */
+var phoneDetected = false;
+var phoneDetectionInterval = null;
+var socket = null;
+var faceDetector = null;
+var suspicionScore = 0; /* 0–100 suspicion percentage */
+var MAX_VIOLATIONS = 5; /* General violation auto-submit threshold (multi-face / phone / no-face are INSTANT) */
+var gazeAwayConsecutive = 0;
+var gazeWarningCooldown = 0;
+
+/* Face Verification State */
+var fvStream = null;
+var fvMode = null;
+var fvPendingStudent = null;
+var registeredFaceData = {};
+var fvCountdown = null;
+var autoSubmitCountdown = null;
+var autoSubmitSecondsLeft = 0;
+var studentProfilePhoto = null; /* Base64 profile photo captured at login */
+
+/* ─ Particle System ─ */
+var particles = [];
+var animFrame;
+
+/* =====================================================
+   PARTICLE LOGIN BACKGROUND
+===================================================== */
+(function initParticles() {
+  var canvas = document.getElementById('login-canvas');
+  if (!canvas) return;
+  var ctx = canvas.getContext('2d');
+  function resize() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+  }
+  resize();
+  window.addEventListener('resize', resize);
+
+  for (var i = 0; i < 80; i++) {
+    particles.push({
+      x: Math.random() * window.innerWidth,
+      y: Math.random() * window.innerHeight,
+      vx: (Math.random() - .5) * .5,
+      vy: (Math.random() - .5) * .5,
+      r: Math.random() * 2 + .5,
+      a: Math.random()
+    });
+  }
+
+  function drawParticles() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    /* Hexagonal grid */
+    ctx.strokeStyle = 'rgba(56,189,248,0.04)';
+    ctx.lineWidth = 1;
+    var hex = 50;
+    for (var hx = -hex; hx < canvas.width + hex*2; hx += hex*1.5) {
+      for (var hy = -hex; hy < canvas.height + hex*2; hy += hex * Math.sqrt(3)) {
+        var offset = (Math.floor(hx / (hex * 1.5)) % 2) * hex * Math.sqrt(3) / 2;
+        drawHex(ctx, hx, hy + offset, hex * .48);
+      }
+    }
+
+    /* Particles */
+    particles.forEach(function(p) {
+      p.x += p.vx; p.y += p.vy;
+      if (p.x < 0) p.x = canvas.width;
+      if (p.x > canvas.width) p.x = 0;
+      if (p.y < 0) p.y = canvas.height;
+      if (p.y > canvas.height) p.y = 0;
+      p.a += .005;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(56,189,248,' + (Math.sin(p.a) * .3 + .4) + ')';
+      ctx.fill();
+    });
+
+    /* Connection lines */
+    ctx.lineWidth = .6;
+    for (var i = 0; i < particles.length; i++) {
+      for (var j = i + 1; j < particles.length; j++) {
+        var dx = particles[i].x - particles[j].x;
+        var dy = particles[i].y - particles[j].y;
+        var dist = Math.sqrt(dx*dx + dy*dy);
+        if (dist < 100) {
+          ctx.strokeStyle = 'rgba(56,189,248,' + (.15 * (1 - dist/100)) + ')';
+          ctx.beginPath();
+          ctx.moveTo(particles[i].x, particles[i].y);
+          ctx.lineTo(particles[j].x, particles[j].y);
+          ctx.stroke();
+        }
+      }
+    }
+    animFrame = requestAnimationFrame(drawParticles);
+  }
+  drawParticles();
+})();
+
+function drawHex(ctx, x, y, r) {
+  ctx.beginPath();
+  for (var i = 0; i < 6; i++) {
+    var a = Math.PI / 180 * (60 * i - 30);
+    if (i === 0) ctx.moveTo(x + r * Math.cos(a), y + r * Math.sin(a));
+    else ctx.lineTo(x + r * Math.cos(a), y + r * Math.sin(a));
+  }
+  ctx.closePath(); ctx.stroke();
+}
+
+/* =====================================================
+   WAVEFORM ANIMATION
+===================================================== */
+var waveOffset = 0;
+var waveInterval = null;
+
+function startWaveform() {
+  var canvas = document.getElementById('waveform-canvas');
+  if (!canvas) return;
+  var ctx = canvas.getContext('2d');
+  waveInterval = setInterval(function() {
+    var w = canvas.offsetWidth; var h = 36;
+    canvas.width = w; canvas.height = h;
+    ctx.clearRect(0, 0, w, h);
+    waveOffset += .08;
+    ctx.beginPath();
+    ctx.strokeStyle = examActive ? 'rgba(34,197,94,0.7)' : 'rgba(56,189,248,0.4)';
+    ctx.lineWidth = 1.5;
+    for (var x = 0; x < w; x++) {
+      var y = h/2 + Math.sin(x * .06 + waveOffset) * 7 + Math.sin(x * .12 + waveOffset * 1.3) * 4;
+      if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    /* Second wave */
+    ctx.beginPath();
+    ctx.strokeStyle = 'rgba(56,189,248,0.25)';
+    for (var x = 0; x < w; x++) {
+      var y = h/2 + Math.sin(x * .04 + waveOffset * .7) * 5 + Math.sin(x * .09 + waveOffset * 1.8) * 3;
+      if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }, 40);
+}
+
+function stopWaveform() { clearInterval(waveInterval); waveInterval = null; }
+
+/* =====================================================
+   SUSPICION SCORE SYSTEM
+===================================================== */
+function getSuspicionLevel(score) {
+  if (score < 30) return { label: 'LOW', cls: 'susp-low', strokeCls: 'susp-stroke-low' };
+  if (score < 70) return { label: 'MEDIUM', cls: 'susp-medium', strokeCls: 'susp-stroke-medium' };
+  return { label: 'HIGH', cls: 'susp-high', strokeCls: 'susp-stroke-high' };
+}
+
+function buildSuspicionGauge(score) {
+  var r = 46; var circ = 2 * Math.PI * r;
+  var pct = Math.min(score, 100) / 100;
+  var offset = circ * (1 - pct);
+  var lvl = getSuspicionLevel(score);
+  return '<div class="suspicion-gauge-wrap">' +
+    '<svg width="120" height="120" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">' +
+      '<circle class="suspicion-gauge-bg" cx="60" cy="60" r="' + r + '" />' +
+      '<circle class="suspicion-gauge-fill ' + lvl.strokeCls + '" cx="60" cy="60" r="' + r + '" ' +
+        'stroke-dasharray="' + circ.toFixed(1) + '" stroke-dashoffset="' + offset.toFixed(1) + '" />' +
+    '</svg>' +
+    '<div class="suspicion-label">' +
+      '<div class="suspicion-pct ' + lvl.cls + '">' + score + '</div>' +
+      '<div class="suspicion-tag ' + lvl.cls + '">' + lvl.label + '</div>' +
+    '</div>' +
+  '</div>';
+}
+
+function updateSuspicionScore(increment) {
+  suspicionScore = Math.min(100, suspicionScore + increment);
+  /* Update gauge if exam active */
+  var gauge = document.getElementById('live-suspicion-gauge');
+  if (gauge) {
+    var r = 46; var circ = 2 * Math.PI * r;
+    var pct = suspicionScore / 100;
+    var offset = circ * (1 - pct);
+    var lvl = getSuspicionLevel(suspicionScore);
+    var fill = gauge.querySelector('.suspicion-gauge-fill');
+    var pctEl = gauge.querySelector('.suspicion-pct');
+    var tagEl = gauge.querySelector('.suspicion-tag');
+    if (fill) { fill.setAttribute('stroke-dashoffset', offset.toFixed(1)); fill.className = 'suspicion-gauge-fill ' + lvl.strokeCls; }
+    if (pctEl) { pctEl.textContent = suspicionScore; pctEl.className = 'suspicion-pct ' + lvl.cls; pctEl.style.animation = 'scoreUp .3s ease'; setTimeout(function(){ if(pctEl) pctEl.style.animation=''; }, 300); }
+    if (tagEl) { tagEl.textContent = lvl.label; tagEl.className = 'suspicion-tag ' + lvl.cls; }
+  }
+}
+
+/* =====================================================
+   DATA — Pre-populated demo students
+===================================================== */
+var STUDENTS = [
+  {id:1, name:'Arjun Sharma',  dob:'2002-06-14', college:'IIT Bombay',     exams:3, avgScore:88, status:'offline', violations:[
+    {type:'Tab Switch',       time:'10:14:22', exam:'CS101',   severity:'medium', desc:'Student switched browser tab during exam session.'},
+    {type:'Face Not Detected',time:'10:21:05', exam:'CS101',   severity:'high',   desc:'No face visible in camera frame for 12 seconds.'}
+  ]},
+  {id:2, name:'Priya Nair',    dob:'2003-01-28', college:'NIT Trichy',     exams:4, avgScore:94, status:'offline', violations:[]},
+  {id:3, name:'Rohan Mehta',   dob:'2001-11-03', college:'BITS Pilani',    exams:5, avgScore:61, status:'offline', violations:[
+    {type:'Phone Detected',   time:'09:45:33', exam:'MATH201', severity:'high',   desc:'AI detected a mobile phone held in frame.'},
+    {type:'Tab Switch',       time:'09:52:11', exam:'MATH201', severity:'medium', desc:'Browser tab was switched 3 times in 5 minutes.'},
+    {type:'Multiple Faces',   time:'10:01:44', exam:'MATH201', severity:'high',   desc:'More than one face detected in the camera frame.'},
+    {type:'Face Not Detected',time:'10:08:20', exam:'MATH201', severity:'high',   desc:'Face absent from frame for over 20 seconds.'}
+  ]},
+  {id:4, name:'Sneha Iyer',    dob:'2002-08-17', college:'VIT Vellore',    exams:2, avgScore:79, status:'offline', violations:[
+    {type:'Tab Switch',       time:'11:30:10', exam:'HIST101', severity:'medium', desc:'Student navigated away from the exam tab once.'}
+  ]},
+  {id:5, name:'Kiran Rao',     dob:'2003-03-22', college:'PESIT Bangalore',exams:3, avgScore:85, status:'offline', violations:[]}
+];
+
+var LIVE_SESSIONS = {};
+
+var EXAMS = [
+  {id:1, title:'Computer Science 101',code:'CS101',  questions:5, duration:60, status:'active',    enrolled:34, date:'2026-04-28'},
+  {id:2, title:'Mathematics Midterm', code:'MATH201',questions:5, duration:90, status:'completed', enrolled:28, date:'2026-04-20'},
+  {id:3, title:'World History Quiz',  code:'HIST101',questions:5, duration:30, status:'active',    enrolled:22, date:'2026-04-28'}
+];
+
+var QUESTIONS = [
+  {id:1, q:'Which data structure uses Last-In-First-Out (LIFO)?',   opts:['Queue','Stack','Linked List','Binary Tree'],                                                                      ans:1},
+  {id:2, q:'Time complexity of binary search on n elements?',       opts:['O(n)','O(n²)','O(log n)','O(1)'],                                                                                ans:2},
+  {id:3, q:'Which is NOT an object-oriented programming language?', opts:['Java','Python','C++','Assembly'],                                                                                ans:3},
+  {id:4, q:'What does HTML stand for?',                             opts:['HyperText Markup Language','High-Tech Modern Language','HyperText Modeling Language','Home Tool Markup Language'],ans:0},
+  {id:5, q:'What does DNS stand for?',                              opts:['Data Network System','Domain Name System','Dynamic Number Service','Digital Name Server'],                       ans:1}
+];
+
+var studentExams = [
+  {id:1, title:'Computer Science 101', code:'CS101',  questions:5, duration:60, status:'available', date:'2026-04-28', score:null},
+  {id:2, title:'World History Quiz',   code:'HIST101',questions:5, duration:30, status:'completed', date:'2026-04-20', score:82}
+];
+
+/* =====================================================
+   ROLE / LOGIN
+===================================================== */
+function setRole(r) {
+  role = r;
+  document.getElementById('tab-student').classList.toggle('active', r === 'student');
+  document.getElementById('tab-admin').classList.toggle('active', r === 'admin');
+  document.getElementById('student-fields').classList.toggle('hidden', r !== 'student');
+  document.getElementById('admin-fields').classList.toggle('hidden', r !== 'admin');
+  document.getElementById('login-err').classList.add('hidden');
+}
+
+function setStudentTab(tab) {
+  var isReg = tab === 'register';
+  document.getElementById('stab-register').classList.toggle('active', isReg);
+  document.getElementById('stab-login').classList.toggle('active', !isReg);
+  document.getElementById('student-register-panel').classList.toggle('hidden', !isReg);
+  document.getElementById('student-login-panel').classList.toggle('hidden', isReg);
+  /* Clear errors */
+  var re = document.getElementById('reg-err'); if(re) re.classList.add('hidden');
+  var le = document.getElementById('login-stu-err'); if(le) le.classList.add('hidden');
+}
+
+function showStudentLoginErr(msg) {
+  var el = document.getElementById('login-stu-err');
+  if (!el) return;
+  el.textContent = '⚠ ' + msg;
+  el.classList.remove('hidden');
+  el.style.animation = 'none';
+  setTimeout(function(){ el.style.animation = 'shake .35s ease'; }, 10);
+}
+
+function showRegisterErr(msg) {
+  var el = document.getElementById('reg-err');
+  if (!el) return;
+  el.textContent = '⚠ ' + msg;
+  el.classList.remove('hidden');
+  el.style.animation = 'none';
+  setTimeout(function(){ el.style.animation = 'shake .35s ease'; }, 10);
+}
+
+function studentRegister() {
+  var name    = (document.getElementById('r-name')||{}).value||'';
+  var dob     = (document.getElementById('r-dob')||{}).value||'';
+  var college = (document.getElementById('r-college')||{}).value||'';
+  name = name.trim(); college = college.trim();
+  if (!name)    { showRegisterErr('Please enter your full name.'); return; }
+  if (!dob)     { showRegisterErr('Please enter your date of birth.'); return; }
+  if (!college) { showRegisterErr('Please enter your college/institution.'); return; }
+
+  var faceKey = name.toLowerCase() + '|' + dob;
+  if (registeredFaceData[faceKey]) {
+    showRegisterErr('An account with this name and date of birth already exists. Please use Login instead.');
+    return;
+  }
+
+  fvPendingStudent = {
+    name: name, dob: dob, college: college,
+    initials: name.split(' ').map(function(n){ return n[0]; }).join('').toUpperCase().slice(0,2)
+  };
+  fvMode = 'signup';
+  openFaceVerify('signup');
+}
+
+function studentLogin() {
+  var name = (document.getElementById('s-name')||{}).value||'';
+  var dob  = (document.getElementById('s-dob')||{}).value||'';
+  name = name.trim();
+  if (!name) { showStudentLoginErr('Please enter your registered name.'); return; }
+  if (!dob)  { showStudentLoginErr('Please enter your date of birth.'); return; }
+
+  var faceKey = name.toLowerCase() + '|' + dob;
+  if (!registeredFaceData[faceKey]) {
+    showStudentLoginErr('No account found for this name and date of birth. Please register first.');
+    return;
+  }
+
+  /* Look up college from stored registration */
+  var college = registeredFaceData[faceKey].college || '';
+  fvPendingStudent = {
+    name: name, dob: dob, college: college,
+    initials: name.split(' ').map(function(n){ return n[0]; }).join('').toUpperCase().slice(0,2)
+  };
+  fvMode = 'login';
+  openFaceVerify('login');
+}
+
+/* =====================================================
+   FACE VERIFICATION SYSTEM
+===================================================== */
+function openFaceVerify(mode) {
+  var overlay = document.getElementById('face-verify-overlay');
+  var title   = document.getElementById('fv-title');
+  var stepLbl = document.getElementById('fv-step-label');
+  var btn     = document.getElementById('fv-action-btn');
+  var errDiv  = document.getElementById('fv-error');
+  var bar     = document.getElementById('fv-bar');
+  var ring    = document.getElementById('fv-cam-ring');
+  var icon    = document.getElementById('fv-overlay-icon');
+  var status  = document.getElementById('fv-status');
+
+  /* Stop any existing stream before opening a new one */
+  fvCloseCam();
+
+  /* Reset any leftover captured image from a previous session */
+  var oldCapture = ring.querySelector('img.fv-capture');
+  if (oldCapture) oldCapture.remove();
+
+  overlay.classList.remove('hidden');
+  errDiv.style.display = 'none';
+  bar.style.width = '0%';
+  ring.className = 'fv-cam-ring';
+  icon.style.display = 'flex';
+  icon.style.fontSize = '52px';
+  btn.disabled = true;
+  btn.textContent = 'Please wait…';
+  status.textContent = 'Initializing camera…';
+  status.style.color = '';
+
+  if (mode === 'signup') {
+    title.textContent   = 'Register Your Face';
+    stepLbl.textContent = 'Step 2 of 2 — Face Enrollment';
+    icon.textContent    = '📸';
+  } else {
+    title.textContent   = 'Verify Your Identity';
+    stepLbl.textContent = 'Step 2 of 2 — Biometric Check';
+    icon.textContent    = '👤';
+  }
+
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    fvShowError('Camera not supported. Please use Chrome or Edge.');
+    return;
+  }
+
+  navigator.mediaDevices.getUserMedia({ video: { width:320, height:240, facingMode:'user' }, audio: false })
+    .then(function(stream) {
+      fvStream = stream;
+      var vid = document.getElementById('fv-video');
+      /* Reset video element state cleanly */
+      vid.srcObject = null;
+      vid.srcObject = stream;
+      vid.style.display = 'block';
+      icon.style.display = 'none';
+      ring.classList.add('scanning');
+      status.textContent = mode === 'signup'
+        ? 'Position your face in the circle, then click Capture'
+        : 'Look at the camera to verify your identity';
+
+      var playPromise = vid.play();
+      if (playPromise !== undefined) {
+        playPromise.catch(function(playErr) {
+          /* Autoplay blocked — still show feed, user interaction will unblock */
+          console.warn('Camera play() blocked:', playErr.message);
+        });
+      }
+
+      var pct = 0;
+      var pInterval = setInterval(function() {
+        pct = Math.min(pct + 4, 100);
+        bar.style.width = pct + '%';
+        if (pct >= 100) {
+          clearInterval(pInterval);
+          btn.disabled = false;
+          /* Keep ring in scanning state — do NOT remove it here */
+          btn.textContent = mode === 'signup' ? '📸 Capture & Register Face' : '✔ Verify Identity';
+        }
+      }, 80);
+    })
+    .catch(function(err) {
+      var msg = 'Camera access denied. Please allow camera access and try again.';
+      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+        msg = 'Camera permission denied. Click the camera icon in your browser address bar to allow access, then retry.';
+      } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+        msg = 'No camera found. Please connect a camera and try again.';
+      } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
+        msg = 'Camera is in use by another application. Please close other apps using the camera, then retry.';
+      } else if (err.name === 'OverconstrainedError') {
+        msg = 'Camera resolution not supported. Trying with default settings…';
+        /* Retry without constraints */
+        navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+          .then(function(stream) { openFaceVerify._retryStream(stream, mode, ring, icon, status, btn, bar); })
+          .catch(function() { fvShowError('Camera not accessible. Please check your device settings.'); });
+        return;
+      }
+      fvShowError(msg);
+    });
+}
+
+/* Retry helper for overconstrained camera */
+openFaceVerify._retryStream = function(stream, mode, ring, icon, status, btn, bar) {
+  fvStream = stream;
+  var vid = document.getElementById('fv-video');
+  vid.srcObject = stream;
+  vid.style.display = 'block';
+  icon.style.display = 'none';
+  ring.classList.add('scanning');
+  status.textContent = mode === 'signup'
+    ? 'Position your face in the circle, then click Capture'
+    : 'Look at the camera to verify your identity';
+  var p = vid.play(); if (p) p.catch(function(){});
+  var pct = 0;
+  var pi = setInterval(function() {
+    pct = Math.min(pct + 4, 100); bar.style.width = pct + '%';
+    if (pct >= 100) { clearInterval(pi); btn.disabled = false; btn.textContent = mode === 'signup' ? '📸 Capture & Register Face' : '✔ Verify Identity'; }
+  }, 80);
+};
+
+function fvAction() {
+  if (fvMode === 'signup') fvCaptureFace();
+  else fvVerifyFace();
+}
+
+function fvCaptureFace() {
+  var vid = document.getElementById('fv-video');
+  if (!vid || vid.readyState < 2) { fvShowError('Camera not ready. Please wait a moment and try again.'); return; }
+  if (!vid.videoWidth || !vid.videoHeight) { fvShowError('Camera stream not yet delivering frames. Please wait and retry.'); return; }
+
+  /* High-res canvas for profile photo */
+  var profileCanvas = document.createElement('canvas');
+  profileCanvas.width = 320; profileCanvas.height = 240;
+  var pctx = profileCanvas.getContext('2d');
+  pctx.drawImage(vid, 0, 0, 320, 240);
+  var profileDataUrl = profileCanvas.toDataURL('image/jpeg', .9);
+
+  /* Lower-res canvas for face descriptor */
+  var canvas = document.createElement('canvas');
+  canvas.width = 160; canvas.height = 120;
+  var ctx = canvas.getContext('2d');
+  ctx.drawImage(vid, 0, 0, 160, 120);
+  var imgData = ctx.getImageData(0, 0, 160, 120);
+
+  if (!hasPresence(imgData.data)) {
+    fvShowError('No face detected. Please position your face clearly in the circle and ensure good lighting.');
+    return;
+  }
+
+  var desc = computeDescriptor(imgData.data, 160, 120);
+  var faceKey = fvPendingStudent.name.toLowerCase() + '|' + fvPendingStudent.dob;
+  var photoDataUrl = profileDataUrl;
+  registeredFaceData[faceKey] = { snapshot: photoDataUrl, desc: desc, college: fvPendingStudent.college };
+  studentProfilePhoto = photoDataUrl; /* Store as profile photo */
+
+  /* Show captured image */
+  var captureImg = document.createElement('img');
+  captureImg.className = 'fv-capture';
+  captureImg.src = photoDataUrl;
+  var vid2 = document.getElementById('fv-video');
+  if (vid2 && vid2.parentNode) vid2.parentNode.insertBefore(captureImg, vid2.nextSibling);
+  if (vid2) vid2.style.display = 'none';
+
+  var ring = document.getElementById('fv-cam-ring');
+  ring.classList.add('success');
+  var status = document.getElementById('fv-status');
+  status.textContent = '✓ Face registered successfully! Entering portal…';
+  status.style.color = '#4ade80';
+  document.getElementById('fv-bar').style.width = '100%';
+
+  fvCloseCam();
+  setTimeout(completeStudentLoginV2, 1000);
+}
+
+function fvVerifyFace() {
+  var vid = document.getElementById('fv-video');
+  if (!vid || vid.readyState < 2) { fvShowError('Camera not ready. Please wait and try again.'); return; }
+  if (!vid.videoWidth || !vid.videoHeight) { fvShowError('Camera stream not delivering frames yet. Please wait and retry.'); return; }
+  var canvas = document.createElement('canvas');
+  canvas.width = 160; canvas.height = 120;
+  var ctx = canvas.getContext('2d');
+  ctx.drawImage(vid, 0, 0, 160, 120);
+  var imgData = ctx.getImageData(0, 0, 160, 120);
+
+  if (!hasPresence(imgData.data)) {
+    fvShowError('No face detected. Please look directly at the camera.');
+    return;
+  }
+
+  var faceKey = fvPendingStudent.name.toLowerCase() + '|' + fvPendingStudent.dob;
+  var stored = registeredFaceData[faceKey];
+  if (!stored) {
+    fvShowError('No registered face found. Please sign up first.');
+    return;
+  }
+
+  var liveDesc = computeDescriptor(imgData.data, 160, 120);
+  var sim = computeSimilarity(liveDesc, stored.desc);
+  var ring = document.getElementById('fv-cam-ring');
+  var status = document.getElementById('fv-status');
+  var bar = document.getElementById('fv-bar');
+
+  if (sim > 0.82) {
+    ring.classList.add('success');
+    status.textContent = '✓ Identity verified! Welcome back!';
+    status.style.color = '#4ade80';
+    bar.style.width = '100%';
+    fvCloseCam();
+    setTimeout(completeStudentLoginV2, 900);
+  } else {
+    ring.classList.add('fail');
+    fvShowError('Identity mismatch. Face not recognized. Please try again or contact admin.');
+  }
+}
+
+function fvCloseCam() {
+  if (fvStream) { fvStream.getTracks().forEach(function(t){ t.stop(); }); fvStream = null; }
+}
+
+function fvCancel() {
+  fvCloseCam();
+  var vid = document.getElementById('fv-video');
+  if (vid) { vid.style.display = 'none'; vid.srcObject = null; }
+  var ring = document.getElementById('fv-cam-ring');
+  if (ring) ring.className = 'fv-cam-ring';
+  var oldCapture = ring ? ring.querySelector('img.fv-capture') : null;
+  if (oldCapture) oldCapture.remove();
+  document.getElementById('face-verify-overlay').classList.add('hidden');
+}
+
+function fvShowError(msg) {
+  var err = document.getElementById('fv-error');
+  err.style.display = 'block';
+  err.textContent = msg;
+  err.style.animation = 'none';
+  setTimeout(function(){ err.style.animation = 'shake .35s ease'; }, 10);
+  var ring = document.getElementById('fv-cam-ring');
+  ring.classList.remove('scanning'); ring.classList.add('fail');
+  var btn = document.getElementById('fv-action-btn');
+  btn.disabled = false;
+  btn.textContent = '↺ Retry';
+}
+
+function computeDescriptor(imgData, w, h) {
+  var cells = 8, desc = [];
+  var cw = Math.floor(w / cells), ch = Math.floor(h / cells);
+  for (var cy = 0; cy < cells; cy++) {
+    for (var cx = 0; cx < cells; cx++) {
+      var sum = 0, cnt = 0;
+      for (var py = cy * ch; py < (cy + 1) * ch; py++) {
+        for (var px = cx * cw; px < (cx + 1) * cw; px++) {
+          var idx = (py * w + px) * 4;
+          sum += imgData[idx] * .299 + imgData[idx+1] * .587 + imgData[idx+2] * .114;
+          cnt++;
+        }
+      }
+      desc.push(sum / cnt);
+    }
+  }
+  return desc;
+}
+
+function computeSimilarity(a, b) {
+  if (a.length !== b.length) return 0;
+  var dot = 0, na = 0, nb = 0;
+  for (var i = 0; i < a.length; i++) { dot += a[i]*b[i]; na += a[i]*a[i]; nb += b[i]*b[i]; }
+  if (na === 0 || nb === 0) return 0;
+  return dot / (Math.sqrt(na) * Math.sqrt(nb));
+}
+
+function hasPresence(imgData) {
+  var brightness = 0, total = imgData.length / 4;
+  for (var i = 0; i < imgData.length; i += 4) {
+    brightness += imgData[i] * .299 + imgData[i+1] * .587 + imgData[i+2] * .114;
+  }
+  brightness /= total;
+  var variance = 0;
+  for (var i = 0; i < imgData.length; i += 4) {
+    var lum = imgData[i] * .299 + imgData[i+1] * .587 + imgData[i+2] * .114;
+    variance += (lum - brightness) * (lum - brightness);
+  }
+  variance /= total;
+  return variance > 40;
+}
+
+function completeStudentLogin() {
+  document.getElementById('face-verify-overlay').classList.add('hidden');
+  currentStudent = fvPendingStudent;
+  fvPendingStudent = null; fvMode = null;
+  suspicionScore = 0;
+
+  /* Retrieve profile photo from registered face data */
+  var faceKey = currentStudent.name.toLowerCase() + '|' + currentStudent.dob;
+  var stored = registeredFaceData[faceKey];
+  if (stored && stored.snapshot) studentProfilePhoto = stored.snapshot;
+
+  LIVE_SESSIONS[currentStudent.name] = {
+    id: Date.now(), name: currentStudent.name, dob: currentStudent.dob, college: currentStudent.college,
+    status: 'online', loginTime: new Date().toLocaleTimeString(),
+    violations: [], examStarted: false, examName: null, score: null, grade: null,
+    profilePhoto: studentProfilePhoto
+  };
+
+  /* Save to localStorage */
+  try { localStorage.setItem('hm_sessions', JSON.stringify(LIVE_SESSIONS)); } catch(e){}
+
+  document.getElementById('login-page').classList.add('hidden');
+  document.getElementById('student-app').classList.remove('hidden');
+  document.getElementById('s-nav-name').textContent = currentStudent.name;
+  /* Show profile photo in nav avatar */
+  var navAv = document.getElementById('s-nav-av');
+  if (studentProfilePhoto) {
+    navAv.style.backgroundImage = 'url(' + studentProfilePhoto + ')';
+    navAv.style.backgroundSize = 'cover';
+    navAv.style.backgroundPosition = 'center';
+    navAv.textContent = '';
+    navAv.style.border = '2px solid var(--cyan)';
+  } else {
+    navAv.textContent = currentStudent.initials;
+  }
+  sessionViolations = [];
+  violationCount = 0;
+  renderSDash();
+}
+
+function adminLogin() {
+  var u = document.getElementById('a-user').value.trim();
+  var p = document.getElementById('a-pass').value;
+  if (u === 'hexaminds' && p === 'hexaminds123') {
+    document.getElementById('login-page').classList.add('hidden');
+    document.getElementById('admin-app').classList.remove('hidden');
+    renderADash();
+  } else {
+    var err = document.getElementById('login-err');
+    err.classList.remove('hidden');
+    err.style.animation = 'none';
+    setTimeout(function(){ err.style.animation = 'shake .35s ease'; }, 10);
+  }
+}
+
+function logout() {
+  stopExamMonitoring();
+  stopCam();
+  fvCloseCam();
+  stopWaveform();
+  clearInterval(examTimer);
+  clearInterval(autoSubmitCountdown);
+  var banner = document.getElementById('auto-submit-banner');
+  if (banner) banner.classList.remove('visible');
+  examActive = false;
+  suspicionScore = 0;
+  closeToast();
+
+  if (currentStudent.name && LIVE_SESSIONS[currentStudent.name]) {
+    LIVE_SESSIONS[currentStudent.name].status = 'offline';
+  }
+  currentStudent = {};
+
+  document.getElementById('login-page').classList.remove('hidden');
+  ['student-app','admin-app','face-verify-overlay'].forEach(function(id){ document.getElementById(id).classList.add('hidden'); });
+  /* Clear all student form fields */
+  ['s-name','s-dob','r-name','r-dob','r-college','a-user','a-pass'].forEach(function(id){ var el=document.getElementById(id); if(el) el.value=''; });
+  document.getElementById('login-err').classList.add('hidden');
+  var lse = document.getElementById('login-stu-err'); if(lse) lse.classList.add('hidden');
+  var re = document.getElementById('reg-err'); if(re) re.classList.add('hidden');
+  setRole('student');
+  setStudentTab('register');
+  examAnswers = {};
+  sessionViolations = [];
+  violationCount = 0;
+  fvPendingStudent = null; fvMode = null;
+  autoSubmitSecondsLeft = 0;
+  studentProfilePhoto = null;
+  noFaceWarningCount = 0;
+  multipleFacesAutoSubmitted = false;
+  lastFaceState = 'normal';
+  noFaceConsecutive = 0;
+}
+
+/* =====================================================
+   VIOLATION SYSTEM
+===================================================== */
+function showViolationFlash() {
+  var f = document.getElementById('viol-flash');
+  if (!f) return;
+  f.style.display = 'block';
+  setTimeout(function(){ f.style.display = 'none'; }, 400);
+}
+
+function showViolationAlert(title, msg, critical) {
+  var toast  = document.getElementById('viol-toast');
+  var ttitle = document.getElementById('vt-title');
+  var tmsg   = document.getElementById('vt-msg');
+  var tcount = document.getElementById('vt-count');
+  if (!toast) return;
+  if (ttitle) ttitle.textContent = title;
+  if (tmsg)   tmsg.textContent   = msg;
+  if (tcount) tcount.textContent = '⚡ Violations: ' + violationCount + ' / ' + MAX_VIOLATIONS + '  •  Suspicion: ' + suspicionScore + '%  •  Auto-submit at ' + MAX_VIOLATIONS + ' (or instantly on phone / multi-face / no-face)';
+  toast.classList.remove('hidden');
+  toast.style.animation = 'none';
+  setTimeout(function(){ toast.style.animation = 'toastSlide .45s cubic-bezier(.16,1,.3,1)'; }, 10);
+  showViolationFlash();
+  clearTimeout(toastTimeout);
+  if (!critical) toastTimeout = setTimeout(closeToast, 7000);
+}
+
+function closeToast() {
+  var t = document.getElementById('viol-toast');
+  if (t) t.classList.add('hidden');
+}
+
+function captureViolationPhoto() {
+  var vid = document.getElementById('cam-video');
+  if (!vid) return null;
+  if (vid.tagName === 'VIDEO' && vid.readyState < 2) return null;
+  if (vid.tagName === 'IMG' && (!vid.complete || !vid.naturalWidth)) return null;
+  if (vid.style.display === 'none') return null;
+  try {
+    var canvas = document.createElement('canvas');
+    canvas.width  = vid.naturalWidth  || vid.videoWidth  || 320;
+    canvas.height = vid.naturalHeight || vid.videoHeight || 240;
+    var ctx = canvas.getContext('2d');
+    ctx.drawImage(vid, 0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = 'rgba(239,68,68,0.15)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(0, canvas.height - 22, canvas.width, 22);
+    ctx.fillStyle = '#ef4444';
+    ctx.font = 'bold 10px monospace';
+    ctx.fillText('⚠ VIOLATION ' + new Date().toLocaleTimeString(), 6, canvas.height - 7);
+    return canvas.toDataURL('image/jpeg', .75);
+  } catch(e) { return null; }
+}
+
+function logViolation(type, desc, severity) {
+  var photo = captureViolationPhoto();
+  var v = { type: type, time: new Date().toLocaleTimeString(), exam: 'CS101', severity: severity, desc: desc, photo: photo };
+  sessionViolations.push(v);
+  if (currentStudent.name && LIVE_SESSIONS[currentStudent.name]) {
+    LIVE_SESSIONS[currentStudent.name].violations.push(v);
+    try { localStorage.setItem('hm_violations_' + currentStudent.name, JSON.stringify(LIVE_SESSIONS[currentStudent.name].violations)); } catch(e){}
+  }
+  /* Update suspicion score based on severity */
+  var inc = severity === 'high' ? 20 : 10;
+  updateSuspicionScore(inc);
+  var vc = document.getElementById('viol-count'); if (vc) { vc.textContent = violationCount; vc.style.animation = 'scoreUp .3s ease'; setTimeout(function(){ if(vc) vc.style.animation=''; }, 300); }
+}
+
+function escalateProctorBar(label) {
+  var pb = document.getElementById('proctor-bar');
+  if (pb) {
+    pb.classList.add('escalated');
+    pb.innerHTML = '<span style="width:10px;height:10px;border-radius:50%;background:#ef4444;animation:blink .5s infinite;display:inline-block;box-shadow:0 0 8px var(--red)"></span>' +
+      '&nbsp;🚨 VIOLATION: ' + label + ' — ' + violationCount + ' violation(s) logged';
+    setTimeout(function(){ if(pb){ pb.classList.remove('escalated'); pb.innerHTML = '<span style="width:9px;height:9px;border-radius:50%;background:#ef4444;animation:blink 1.2s infinite;display:inline-block;box-shadow:0 0 6px var(--red)"></span>&nbsp;Proctoring active — do NOT switch tabs or open other apps'; } }, 3000);
+  }
+}
+
+function setCamStatus(msg, color) {
+  var cs = document.getElementById('cam-status');
+  if (cs) {
+    cs.textContent = msg;
+    cs.style.color = color === 'green' ? 'var(--green)' : color === 'red' ? 'var(--red)' : 'var(--amber)';
+  }
+}
+
+/* =====================================================
+   EXAM MONITORING
+===================================================== */
+function startExamMonitoring() {
+  if (!examActive) return;
+
+  /* Page visibility (tab switch / app switch) — only fires when the page is hidden */
+  document.addEventListener('visibilitychange', handleTabSwitch);
+
+  /* ── Copy-paste detection ── */
+  document.addEventListener('copy',  handleCopyPaste);
+  document.addEventListener('paste', handleCopyPaste);
+  document.addEventListener('cut',   handleCopyPaste);
+
+  /* ── Right-click prevention ── */
+  document.addEventListener('contextmenu', handleRightClick);
+
+  /* ── Keyboard shortcut detection ── */
+  document.addEventListener('keydown', handleKeyDown);
+
+  /* Phone detection is handled by COCO-SSD inside the face detection loop (initFaceDetection).
+     No random simulation needed — AI detects real phones in camera frame. */
+
+  /* Audio monitoring indicator update */
+  var audioInterval = setInterval(function() {
+    if (!examActive) { clearInterval(audioInterval); return; }
+    var bars = document.querySelectorAll('.audio-bar');
+    bars.forEach(function(b) {
+      b.style.setProperty('--h', (Math.random() * 14 + 4) + 'px');
+    });
+  }, 300);
+}
+
+function handleTabSwitch() {
+  if (!examActive) return;
+  if (document.hidden) {
+    /* Only triggers when student actually switches to another tab/window/app */
+    violationCount++;
+    logViolation('Tab Switch', 'Student switched to another browser tab or application during the exam.', 'high');
+    showViolationAlert('🔀 Tab Switch Detected',
+      'You switched away from the exam to another tab or application. This is a critical violation. Exam may be auto-submitted.', false);
+    escalateProctorBar('Tab Switch');
+    checkAutoSubmit();
+  }
+}
+
+function handleCopyPaste(e) {
+  if (!examActive) return;
+  e.preventDefault();
+  var type = e.type === 'copy' ? 'Copy' : e.type === 'paste' ? 'Paste' : 'Cut';
+  violationCount++;
+  logViolation(type + ' Detected', 'Student attempted to ' + type.toLowerCase() + ' content during the exam. This is not allowed.', 'medium');
+  showViolationAlert('📋 ' + type + ' Attempt Blocked',
+    'Copy/paste operations are not permitted during the exam. This action has been logged.', false);
+  escalateProctorBar(type + ' Blocked');
+  checkAutoSubmit();
+  /* Show quick warning */
+  showCPWarn('⛔ ' + type.toUpperCase() + ' IS NOT ALLOWED DURING EXAM');
+}
+
+function showCPWarn(msg) {
+  var old = document.querySelector('.cp-warn');
+  if (old) old.remove();
+  var el = document.createElement('div');
+  el.className = 'cp-warn';
+  el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(function(){ el.remove(); }, 2500);
+}
+
+function handleRightClick(e) {
+  if (!examActive) return;
+  e.preventDefault();
+  showCPWarn('⛔ RIGHT-CLICK IS DISABLED DURING EXAM');
+}
+
+function handleKeyDown(e) {
+  if (!examActive) return;
+  /* Block common cheating shortcuts */
+  var blocked = [
+    (e.ctrlKey && e.key === 'c'),
+    (e.ctrlKey && e.key === 'v'),
+    (e.ctrlKey && e.key === 'u'), /* view source */
+    (e.ctrlKey && e.shiftKey && e.key === 'I'), /* devtools */
+    (e.key === 'F12'),
+    (e.ctrlKey && e.key === 'p'), /* print */
+    (e.altKey && e.key === 'PrintScreen'),
+  ];
+  if (blocked.some(Boolean)) {
+    e.preventDefault();
+    if (e.key === 'F12' || (e.ctrlKey && e.shiftKey && e.key === 'I') || (e.ctrlKey && e.key === 'u')) {
+      violationCount++;
+      logViolation('Dev Tools Attempt', 'Student attempted to open browser developer tools (F12 / Inspect).', 'high');
+      showViolationAlert('🔧 Developer Tools Blocked',
+        'Attempting to open developer tools during an exam is a serious violation.', false);
+      escalateProctorBar('Dev Tools Attempt');
+      checkAutoSubmit();
+    }
+  }
+}
+
+function stopExamMonitoring() {
+  document.removeEventListener('visibilitychange', handleTabSwitch);
+  document.removeEventListener('copy',  handleCopyPaste);
+  document.removeEventListener('paste', handleCopyPaste);
+  document.removeEventListener('cut',   handleCopyPaste);
+  document.removeEventListener('contextmenu', handleRightClick);
+  document.removeEventListener('keydown', handleKeyDown);
+  clearInterval(phoneDetectionInterval);
+  phoneDetectionInterval = null;
+}
+
+function checkAutoSubmit() {
+  if (violationCount >= MAX_VIOLATIONS && examActive) {
+    submitExam(true);
+  }
+}
+
+function handlePhoneDetected() {
+  /* Legacy shim — delegates to ML handler */
+  handlePhoneDetectedML('cell phone', 92);
+}
+
+/* =====================================================
+   AUTO-SUBMIT COUNTDOWN
+===================================================== */
+function startAutoSubmitCountdown(reason) {
+  if (autoSubmitSecondsLeft > 0) return;
+  autoSubmitSecondsLeft = 5;
+  var banner = document.getElementById('auto-submit-banner');
+  if (banner) banner.classList.add('visible');
+  function tick() {
+    if (!examActive) { clearAutoSubmitCountdown(); return; }
+    var banner = document.getElementById('auto-submit-banner');
+    if (banner) banner.textContent = '⛔ ' + reason + ' — Auto-submitting in ' + autoSubmitSecondsLeft + 's…';
+    if (autoSubmitSecondsLeft <= 0) { clearAutoSubmitCountdown(); if (examActive) submitExam(true); return; }
+    autoSubmitSecondsLeft--;
+    autoSubmitCountdown = setTimeout(tick, 1000);
+  }
+  tick();
+}
+
+function clearAutoSubmitCountdown() {
+  clearTimeout(autoSubmitCountdown);
+  autoSubmitCountdown = null;
+  autoSubmitSecondsLeft = 0;
+  var banner = document.getElementById('auto-submit-banner');
+  if (banner) banner.classList.remove('visible');
+}
+
+/* =====================================================
+   FACE RESULT HANDLER
+===================================================== */
+/* GAZE / LOOK-AWAY — soft warning only, no auto-submit, no violation increment */
+function checkGazeAway(isAway) {
+  if (!examActive) { gazeAwayConsecutive = 0; return; }
+  if (gazeWarningCooldown > 0) gazeWarningCooldown--;
+  if (isAway) {
+    gazeAwayConsecutive++;
+    /* Require ~3 consecutive frames (~2 s) to avoid false positives from blinks/small movements */
+    if (gazeAwayConsecutive === 4 && gazeWarningCooldown === 0) {
+      gazeWarningCooldown = 12; /* ~8 s before next warning */
+      var bar = document.getElementById('cam-viol-bar');
+      if (bar) { bar.classList.add('visible'); bar.textContent = '👀  LOOK AT THE SCREEN — Gaze diverted'; bar.style.background = 'rgba(245,158,11,0.78)'; }
+      setCamStatus('⚠ Please look at the camera — keep your eyes on the screen', 'red');
+      showViolationAlert('👀 Look Away Warning',
+        'Please keep your eyes on the screen. Repeated look-aways will be logged as a violation.', false);
+      try {
+        logViolation('Gaze Diverted (Warning)',
+          'Student is not looking at the screen. Soft warning issued — no violation counted.', 'low');
+      } catch(e) {}
+    }
+  } else {
+    if (gazeAwayConsecutive > 0) {
+      gazeAwayConsecutive = 0;
+      var bar2 = document.getElementById('cam-viol-bar');
+      /* Only clear the warning bar if it was set by gaze (orange) and no other alert is active */
+      if (bar2 && bar2.textContent.indexOf('LOOK AT THE SCREEN') !== -1) {
+        bar2.classList.remove('visible');
+      }
+    }
+  }
+}
+
+function applyFaceResult(count, simulated) {
+  var bar    = document.getElementById('cam-viol-bar');
+  var camBox = document.getElementById('cam-box');
+  var badge  = document.getElementById('face-count-badge');
+
+  /* ── NO FACE ── */
+  if (count === 0) {
+    noFaceConsecutive++;
+    /* Require 2 consecutive zero-face frames before flagging (reduces false positives) */
+    if (noFaceConsecutive < 3) return;
+
+    if (bar)    { bar.classList.add('visible'); bar.textContent = '⚠  NO FACE DETECTED'; bar.style.background = 'rgba(239,68,68,0.7)'; }
+    if (camBox) { camBox.classList.add('alert'); camBox.classList.remove('phone-detected'); }
+    if (badge)  { badge.classList.add('visible'); badge.textContent = '👁 0 faces'; badge.style.background = 'rgba(239,68,68,0.85)'; }
+    setCamStatus('⚠ No face detected — violation logged', 'red');
+
+    /* Only act once per state transition (avoid spamming every frame) */
+    if (lastFaceState !== 'none') {
+      lastFaceState = 'none';
+      noFaceWarningCount++;
+      violationCount++;
+      var vc = document.getElementById('viol-count');
+      if (vc) { vc.textContent = violationCount; vc.style.animation = 'scoreUp .3s ease'; setTimeout(function(){ if(vc) vc.style.animation=''; }, 300); }
+      logViolation('Face Not Detected (Occurrence ' + noFaceWarningCount + ')',
+        'No face visible in camera frame. Student may have stepped away or covered the camera.', 'high');
+      escalateProctorBar('No Face Detected');
+
+      /* ── INSTANT AUTO-SUBMIT on any no-face detection ── */
+      showViolationAlert('🚫 No Face Detected — Auto-Submitting!',
+        'Your face is not visible in the camera. Per strict proctoring policy, your exam is being auto-submitted now.', true);
+      startAutoSubmitCountdown('No face detected');
+    }
+
+  /* ── MULTIPLE FACES ── */
+  } else if (count > 1) {
+    noFaceConsecutive = 0;
+    multiFaceConsecutive = (multiFaceConsecutive||0) + 1;
+    if (multiFaceConsecutive < 2) return;
+
+    if (bar)    { bar.classList.add('visible'); bar.textContent = '🚫  ' + count + ' FACES DETECTED — UNAUTHORIZED PERSON'; bar.style.background = 'rgba(180,0,0,0.85)'; }
+    if (camBox) { camBox.classList.add('alert'); camBox.classList.remove('phone-detected'); }
+    if (badge)  { badge.classList.add('visible'); badge.textContent = '👥 ' + count + ' faces'; badge.style.background = 'rgba(180,0,0,0.9)'; }
+    setCamStatus('🚫 ' + count + ' faces detected — unauthorized person!', 'red');
+
+    /* Trigger auto-submit on EVERY new detection of multiple faces (not just first time).
+       multipleFacesAutoSubmitted prevents duplicate submissions within the same detection burst. */
+    if (lastFaceState !== 'multiple') {
+      lastFaceState = 'multiple';
+      multipleFacesAutoSubmitted = false; /* reset so a new burst can trigger again */
+    }
+
+    if (!multipleFacesAutoSubmitted && examActive) {
+      multipleFacesAutoSubmitted = true;
+      violationCount++;
+      var vc2 = document.getElementById('viol-count');
+      if (vc2) { vc2.textContent = violationCount; vc2.style.animation = 'scoreUp .3s ease'; setTimeout(function(){ if(vc2) vc2.style.animation=''; }, 300); }
+      logViolation('Multiple Faces Detected (' + count + ')',
+        count + ' faces detected in the camera frame. An unauthorized person is present. Exam auto-submitted immediately.', 'high');
+      escalateProctorBar('Multiple Faces (' + count + ') Detected');
+      showViolationAlert('🚫 ' + count + ' Faces Detected — Auto-Submitting!',
+        count + ' faces detected in your camera. An unauthorized person is present. Your exam is being submitted immediately per strict proctoring policy.', true);
+      /* Immediate auto-submit — 3 s grace period so student can see the alert */
+      startAutoSubmitCountdown('Multiple faces (' + count + ') detected');
+    }
+
+  /* ── EXACTLY 1 FACE — Normal ── */
+  } else {
+    noFaceConsecutive = 0;
+    multiFaceConsecutive = 0;
+    if (lastFaceState === 'multiple') {
+      /* Student was flagged for multiple faces; reset burst flag when camera clears */
+      multipleFacesAutoSubmitted = false;
+      clearAutoSubmitCountdown();
+    }
+    if (bar)    { bar.classList.remove('visible'); }
+    if (camBox) { camBox.classList.remove('alert'); }
+    if (badge)  { badge.classList.add('visible'); badge.textContent = '✓ 1 face'; badge.style.background = 'rgba(34,197,94,0.78)'; }
+    if (lastFaceState !== 'normal') {
+      lastFaceState = 'normal';
+      setCamStatus('✓ Face detected — proctoring active', 'green');
+    }
+  }
+}
+
+/* =====================================================
+   STUDENT NAVIGATION
+===================================================== */
+function sNav(page, el) {
+  document.querySelectorAll('#student-app .si').forEach(function(i){ i.classList.remove('active'); });
+  el.classList.add('active');
+  if      (page === 'sdash')    renderSDash();
+  else if (page === 'sjoin')    renderSJoin();
+  else if (page === 'sresults') renderSResults();
+}
+
+/* =====================================================
+   STUDENT PAGES
+===================================================== */
+function renderSDash() {
+  var initials = currentStudent.initials || '?';
+  var profilePhotoHtml = studentProfilePhoto
+    ? '<div style="width:56px;height:56px;border-radius:16px;background:linear-gradient(135deg,var(--cyan2),var(--blue));overflow:hidden;box-shadow:0 6px 20px var(--cyan-glow);border:2.5px solid var(--cyan);flex-shrink:0"><img src="' + studentProfilePhoto + '" style="width:100%;height:100%;object-fit:cover;border-radius:13px" /></div>'
+    : '<div style="width:56px;height:56px;border-radius:16px;background:linear-gradient(135deg,var(--cyan2),var(--blue));display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:800;color:#fff;box-shadow:0 6px 20px var(--cyan-glow)">' + initials + '</div>';
+  document.getElementById('s-content').innerHTML =
+    '<div class="page-enter">' +
+    '<div style="display:flex;align-items:center;gap:16px;margin-bottom:24px">' +
+      profilePhotoHtml +
+      '<div>' +
+        '<div class="page-title" style="margin-bottom:2px">Welcome, ' + currentStudent.name + '</div>' +
+        '<div class="page-sub" style="margin-bottom:0">' + currentStudent.college + ' &nbsp;·&nbsp; <span style="font-family:\'JetBrains Mono\',monospace">' + currentStudent.dob + '</span></div>' +
+      '</div>' +
+    '</div>' +
+    '<div class="stats-grid" style="grid-template-columns:repeat(3,1fr)">' +
+      '<div class="stat-card anim-fade-up delay-1"><div class="stat-label">Available Exams</div><div class="stat-value" style="color:var(--cyan)">2</div><div class="stat-sub">Ready to take</div></div>' +
+      '<div class="stat-card anim-fade-up delay-2"><div class="stat-label">Completed</div><div class="stat-value" style="color:var(--green)">1</div><div class="stat-sub">This semester</div></div>' +
+      '<div class="stat-card anim-fade-up delay-3"><div class="stat-label">Avg Score</div><div class="stat-value">82%</div><div class="stat-sub">Grade: B+</div></div>' +
+    '</div>' +
+    '<div class="card anim-fade-up delay-2" style="margin-bottom:16px">' +
+      '<div class="section-title">📋 Your Exams</div>' +
+      studentExams.map(function(e){
+        return '<div style="display:flex;align-items:center;justify-content:space-between;padding:16px 0;border-bottom:1px solid var(--border)">' +
+          '<div>' +
+            '<div style="font-weight:700;font-size:14px;color:var(--text)">' + e.title + '</div>' +
+            '<div style="font-size:12px;color:var(--text3);margin-top:4px;font-family:\'JetBrains Mono\',monospace">' + e.questions + ' Qs &nbsp;·&nbsp; ' + e.duration + ' min &nbsp;·&nbsp; ' + e.date + '</div>' +
+          '</div>' +
+          (e.status === 'completed'
+            ? '<span class="badge badge-green">✓ Score: ' + e.score + '%</span>'
+            : '<button class="btn-primary btn-sm" onclick="startExam(' + e.id + ')">Start Exam →</button>') +
+        '</div>';
+      }).join('') +
+    '</div>' +
+    '<div class="card anim-fade-up delay-3">' +
+      '<div class="section-title">🔑 Join with Exam Code</div>' +
+      '<div style="display:flex;gap:10px">' +
+        '<input id="code-inp" placeholder="Enter exam code e.g. CS101" style="flex:1;letter-spacing:3px;font-family:\'JetBrains Mono\',monospace;font-size:15px;text-transform:uppercase" />' +
+        '<button class="btn-primary" onclick="joinCode()">Join →</button>' +
+      '</div>' +
+    '</div>' +
+    '</div>';
+}
+
+function renderSJoin() {
+  document.getElementById('s-content').innerHTML =
+    '<div style="max-width:440px" class="page-enter">' +
+    '<div class="page-title">Join an Exam</div>' +
+    '<div class="page-sub">Enter the access code provided by your invigilator</div>' +
+    '<div class="card cyber-card">' +
+      '<div class="form-group"><label class="form-label">Exam Access Code</label>' +
+      '<input id="join-code" placeholder="e.g. CS101" style="font-size:20px;letter-spacing:5px;text-align:center;font-family:\'JetBrains Mono\',monospace;text-transform:uppercase" /></div>' +
+      '<button class="btn-primary" style="width:100%;padding:13px;font-size:14px;letter-spacing:.5px" onclick="joinCode2()">VERIFY &amp; START EXAM →</button>' +
+    '</div></div>';
+}
+
+function renderSResults() {
+  document.getElementById('s-content').innerHTML =
+    '<div class="page-enter">' +
+    '<div class="page-title">My Results</div>' +
+    '<div class="page-sub">Your exam history and performance analytics</div>' +
+    '<div class="card" style="margin-bottom:16px">' +
+      '<table><thead><tr><th>Exam</th><th>Date</th><th>Score</th><th>Grade</th><th>Status</th></tr></thead><tbody>' +
+        '<tr><td style="font-weight:700;color:var(--text)">World History Quiz</td><td style="color:var(--text3)">Apr 20, 2026</td>' +
+        '<td style="font-weight:700;color:var(--green);font-family:\'JetBrains Mono\',monospace">82%</td>' +
+        '<td style="font-weight:700;color:var(--cyan)">B+</td><td><span class="badge badge-green">Pass</span></td></tr>' +
+      '</tbody></table>' +
+    '</div>' +
+    (sessionViolations.length > 0
+      ? '<div class="card">' +
+          '<div class="section-title" style="color:var(--red)">⚠ Violations This Session (' + sessionViolations.length + ')</div>' +
+          '<div id="live-suspicion-gauge" style="margin-bottom:16px">' + buildSuspicionGauge(suspicionScore) +
+            '<div style="text-align:center;font-size:11px;color:var(--text3);font-weight:600;letter-spacing:.5px">SUSPICION SCORE</div>' +
+          '</div>' +
+          sessionViolations.map(function(v){
+            return '<div class="viol-detail-card">' +
+              '<div style="display:flex;justify-content:space-between;margin-bottom:5px">' +
+                '<div style="font-size:13px;font-weight:800;color:' + (v.severity==='high'?'#f87171':'#fbbf24') + '">' + v.type + '</div>' +
+                '<span class="badge ' + (v.severity==='high'?'badge-red':'badge-amber') + '">' + v.severity + '</span>' +
+              '</div>' +
+              '<div style="font-size:12px;color:var(--text2)">' + v.desc + '</div>' +
+              '<div style="font-size:11px;color:var(--text3);margin-top:5px;font-family:\'JetBrains Mono\',monospace">' + v.time + '</div>' +
+            '</div>';
+          }).join('') +
+        '</div>'
+      : '<div class="card" style="text-align:center;padding:36px;color:var(--green)">✅ No violations this session — excellent proctoring record!</div>'
+    ) +
+    '</div>';
+}
+
+function joinCode()  { var c=(document.getElementById('code-inp')||{}).value||''; if(c) startExam(1); else alert('Enter an exam code.'); }
+function joinCode2() { var c=(document.getElementById('join-code')||{}).value||''; if(c) startExam(1); else alert('Enter an exam code.'); }
+
+function startExam(id) {
+  examAnswers = {};
+  examTimeLeft = 3600;
+  violationCount = 0;
+  suspicionScore = 0;
+  sessionViolations = [];
+  lastFaceState = 'normal';
+  noFaceConsecutive = 0;
+  noFaceWarningCount = 0;
+  multipleFacesAutoSubmitted = false;
+  phoneDetected = false;
+  clearInterval(examTimer);
+  examActive = true;
+
+  if (currentStudent.name && LIVE_SESSIONS[currentStudent.name]) {
+    LIVE_SESSIONS[currentStudent.name].status   = 'exam';
+    LIVE_SESSIONS[currentStudent.name].examStarted = true;
+    LIVE_SESSIONS[currentStudent.name].examName = 'CS101';
+    LIVE_SESSIONS[currentStudent.name].examStart = new Date().toLocaleTimeString();
+  }
+  renderExam(id);
+}
+
+/* =====================================================
+   EXAM RENDER
+===================================================== */
+function renderExam(id) {
+  var exam = studentExams.find(function(e){ return e.id === id; }) || studentExams[0];
+  document.getElementById('s-content').innerHTML =
+    '<div style="display:grid;grid-template-columns:1fr 260px;gap:18px" class="page-enter">' +
+      /* Left: Questions */
+      '<div>' +
+        '<div class="proctor-bar" id="proctor-bar">' +
+          '<span style="width:9px;height:9px;border-radius:50%;background:var(--red);animation:blink 1.2s infinite;display:inline-block;box-shadow:0 0 6px var(--red)"></span>' +
+          '&nbsp;🔴 STRICT MODE: Multiple faces = instant auto-submit · No face (2nd time) = auto-submit · No tab switching' +
+        '</div>' +
+        '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">' +
+          '<div>' +
+            '<div class="page-title" style="margin-bottom:2px;font-size:18px">' + exam.title + '</div>' +
+            '<div style="font-size:12px;color:var(--text3)">' + QUESTIONS.length + ' questions &nbsp;·&nbsp; Browser-proctored</div>' +
+          '</div>' +
+          '<div style="text-align:right">' +
+            '<div style="font-size:10px;color:var(--text3);margin-bottom:4px;font-weight:700;text-transform:uppercase;letter-spacing:.6px">Time Remaining</div>' +
+            '<div class="timer-display" id="exam-timer">60:00</div>' +
+          '</div>' +
+        '</div>' +
+        '<div id="qs-area">' +
+          QUESTIONS.map(function(q, i){
+            return '<div class="q-block" style="animation:cardEntrance .4s ' + (i*0.07) + 's ease both">' +
+              '<div style="font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.8px;margin-bottom:12px">Question ' + (i+1) + ' <span style="color:var(--border2)">/ ' + QUESTIONS.length + '</span></div>' +
+              '<div style="font-size:14px;color:var(--text);margin-bottom:16px;font-weight:600;line-height:1.6">' + q.q + '</div>' +
+              q.opts.map(function(opt, j){
+                return '<div class="q-opt" id="opt-' + q.id + '-' + j + '" onclick="pickAns(' + q.id + ',' + j + ')">' +
+                  '<div class="q-radio"><div class="q-radio-in"></div></div>' + opt + '</div>';
+              }).join('') +
+            '</div>';
+          }).join('') +
+        '</div>' +
+        '<div style="display:flex;justify-content:space-between;margin-top:20px;padding:16px 0;border-top:1px solid var(--border)">' +
+          '<button class="btn-outline" onclick="renderSDash()">Save &amp; Exit</button>' +
+          '<button class="btn-primary" style="padding:11px 24px" onclick="submitExam(false)">Submit Exam ✓</button>' +
+        '</div>' +
+      '</div>' +
+      /* Right: Camera + Monitor */
+      '<div>' +
+        '<div class="card" style="margin-bottom:14px;padding:16px">' +
+          '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">' +
+            '<div class="section-title" style="font-size:12px;margin-bottom:0">📹 Camera Monitor</div>' +
+            '<span class="badge badge-live" style="font-size:9px">LIVE</span>' +
+          '</div>' +
+          '<div class="cam-feed" id="cam-box">' +
+            '<div id="cam-placeholder" style="text-align:center;padding:24px">' +
+              '<div style="font-size:36px;color:var(--text3);margin-bottom:8px;animation:blink 2s infinite">◉</div>' +
+              '<div style="font-size:11px;color:var(--text3)">Requesting camera...</div>' +
+            '</div>' +
+            '<div class="cam-grid"></div>' +
+            '<div class="cam-corner tl"></div><div class="cam-corner tr"></div>' +
+            '<div class="cam-corner bl"></div><div class="cam-corner br"></div>' +
+            '<div class="cam-viol-bar" id="cam-viol-bar">⚠ VIOLATION DETECTED</div>' +
+            '<div class="face-count-badge" id="face-count-badge"></div>' +
+            '<div class="rec-dot"></div>' +
+          '</div>' +
+          '<div id="cam-status" style="font-size:11px;color:var(--text3);margin-top:9px;font-weight:600">Initializing...</div>' +
+          '<div id="face-model-s" style="font-size:10px;color:var(--text3);margin-top:3px">Starting face detection...</div>' +
+          '<div class="py-notice">✅ Browser-native proctoring — no extra software needed</div>' +
+        '</div>' +
+
+        /* Suspicion Score Card */
+        '<div class="card" style="margin-bottom:14px;padding:16px;text-align:center" id="suspicion-card">' +
+          '<div class="section-title" style="font-size:12px;margin-bottom:12px;text-align:left">⚡ Suspicion Score</div>' +
+          '<div id="live-suspicion-gauge">' + buildSuspicionGauge(0) + '</div>' +
+          '<div style="font-size:10px;color:var(--text3);margin-top:4px;font-weight:600;letter-spacing:.4px">REAL-TIME RISK LEVEL</div>' +
+        '</div>' +
+
+        /* Audio Monitor */
+        '<div class="card" style="margin-bottom:14px;padding:14px">' +
+          '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">' +
+            '<div class="section-title" style="font-size:12px;margin-bottom:0">🎙 Audio Monitor</div>' +
+            '<div class="audio-bars">' +
+              [1,2,3,4,5,6].map(function(i){ return '<div class="audio-bar" style="--dur:' + (0.3+i*0.07) + 's;--h:' + (5+i*2) + 'px"></div>'; }).join('') +
+            '</div>' +
+          '</div>' +
+          '<div class="waveform-wrap"><canvas id="waveform-canvas"></canvas></div>' +
+          '<div style="font-size:10px;color:var(--green);margin-top:4px;font-weight:600">● Audio monitoring active</div>' +
+        '</div>' +
+
+        /* Question Navigator */
+        '<div class="card" style="padding:16px">' +
+          '<div class="section-title" style="font-size:12px;margin-bottom:10px">Question Navigator</div>' +
+          '<div class="q-nav-grid" id="q-nav">' +
+            QUESTIONS.map(function(q, i){ return '<div class="q-nav-btn" id="nav-' + q.id + '" onclick="scrollToQ(' + i + ')">' + (i+1) + '</div>'; }).join('') +
+          '</div>' +
+          '<div class="divider"></div>' +
+          '<div style="font-size:12px;color:var(--text2)">Answered: <strong id="ans-count" style="color:var(--cyan)">0</strong> / ' + QUESTIONS.length + '</div>' +
+          '<div style="height:4px;background:var(--border);border-radius:5px;margin-top:7px">' +
+            '<div id="ans-bar" style="height:100%;background:linear-gradient(90deg,var(--cyan2),var(--blue));border-radius:5px;width:0%;transition:width .4s ease;box-shadow:0 0 8px var(--cyan-glow)"></div>' +
+          '</div>' +
+          '<div class="divider"></div>' +
+          '<div style="font-size:11px;color:var(--text2)">Violations: <strong id="viol-count" style="color:var(--red);font-family:\'JetBrains Mono\',monospace">0</strong><span style="color:var(--text3)"> / 2</span></div>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+
+  startTimer();
+  startCam();
+  startExamMonitoring();
+  startWaveform();
+}
+
+/* =====================================================
+   CAMERA — getUserMedia + Face Detection API
+===================================================== */
+function startCam() {
+  var camBox = document.getElementById('cam-box');
+  var ph     = document.getElementById('cam-placeholder');
+  var old = document.getElementById('cam-video');
+  if (old) old.remove();
+
+  var vid = document.createElement('video');
+  vid.id = 'cam-video'; vid.className = 'cam-stream';
+  vid.autoplay = true; vid.muted = true; vid.playsInline = true;
+  vid.style.display = 'none';
+  if (camBox) camBox.insertBefore(vid, camBox.firstChild);
+
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    setCamStatus('⚠ Camera not supported — use Chrome/Edge', 'red');
+    if (ph) ph.innerHTML = '<div style="text-align:center;padding:20px"><div style="font-size:28px;color:#f87171;margin-bottom:8px">⛔</div><div style="font-size:11px;color:var(--red)">Camera not supported.</div></div>';
+    return;
+  }
+
+  navigator.mediaDevices.getUserMedia({ video:{ width:320, height:240, facingMode:'user' }, audio:false })
+    .then(function(stream) {
+      camStream = stream;
+      vid.srcObject = stream;
+      /* Start session recording for admin playback */
+      startExamRecording(stream);
+      var playPromise = vid.play();
+      if (playPromise !== undefined) {
+        playPromise.then(function() {
+          if (ph) ph.style.display = 'none';
+          vid.style.display = 'block';
+          setCamStatus('✓ Camera active — proctoring running', 'green');
+          var fms = document.getElementById('face-model-s');
+          if (fms) fms.textContent = '✓ Face detection active';
+          if (vid.readyState >= 1) { initFaceDetection(vid); } else { vid.addEventListener('loadedmetadata', function(){ initFaceDetection(vid); }, { once: true }); }
+        }).catch(function(playErr) {
+          /* Autoplay policy blocked play() - try again on first user interaction */
+          if (ph) ph.style.display = 'none';
+          vid.style.display = 'block';
+          setCamStatus('⚠ Click anywhere to activate camera', 'amber');
+          function resumeOnInteraction() {
+            vid.play().then(function() {
+              setCamStatus('✓ Camera active — proctoring running', 'green');
+              initFaceDetection(vid);
+            }).catch(function(){});
+            document.removeEventListener('click', resumeOnInteraction);
+          }
+          document.addEventListener('click', resumeOnInteraction);
+        });
+      } else {
+        /* Older browser — no promise returned */
+        if (ph) ph.style.display = 'none';
+        vid.style.display = 'block';
+        setCamStatus('✓ Camera active — proctoring running', 'green');
+        var fms = document.getElementById('face-model-s');
+        if (fms) fms.textContent = '✓ Face detection active';
+        if (vid.readyState >= 1) { initFaceDetection(vid); } else { vid.addEventListener('loadedmetadata', function(){ initFaceDetection(vid); }, { once: true }); }
+      }
+    })
+    .catch(function(err) {
+      var msg = '⚠ Camera access denied';
+      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') msg = '⚠ Camera permission denied — click the camera icon in your browser bar to allow';
+      else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') msg = '⚠ No camera found — please connect a camera';
+      else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') msg = '⚠ Camera in use by another app — please close it and reload';
+      else if (err.name === 'OverconstrainedError') msg = '⚠ Camera resolution not supported — please reload';
+      setCamStatus(msg, 'red');
+      if (ph) ph.innerHTML = '<div style="text-align:center;padding:20px"><div style="font-size:28px;color:#f87171;margin-bottom:8px">⛔</div><div style="font-size:11px;color:var(--red);line-height:1.7">' + msg + '<br><br>Allow camera access and reload.</div></div>';
+    });
+}
+
+/* =====================================================
+   ML MODELS — loaded once, reused across detection loops
+===================================================== */
+var _blazefaceModel  = null;   /* BlazeFace — face count */
+var _cocoSsdModel    = null;   /* COCO-SSD  — phone / object detection */
+var _modelsLoading   = false;
+var _modelsReady     = false;
+var _faceDetectCanvas = null;
+var _faceDetectCtx    = null;
+
+/* Phone-like classes in COCO-SSD */
+var PHONE_CLASSES = ['cell phone','remote','book','laptop','tablet'];
+
+function loadMLModels(onReady) {
+  if (_modelsReady) { onReady(); return; }
+  if (_modelsLoading) { var t = setInterval(function(){ if(_modelsReady){ clearInterval(t); onReady(); } }, 300); return; }
+  _modelsLoading = true;
+  var fms = document.getElementById('face-model-s');
+  if (fms) fms.textContent = '⏳ Loading AI detection models…';
+  Promise.all([
+    (typeof blazeface !== 'undefined' ? blazeface.load() : Promise.reject('no blazeface')),
+    (typeof cocoSsd  !== 'undefined' ? cocoSsd.load()   : Promise.reject('no cocossd'))
+  ]).then(function(models) {
+    _blazefaceModel = models[0];
+    _cocoSsdModel   = models[1];
+    _modelsReady    = true;
+    _modelsLoading  = false;
+    if (fms) fms.textContent = '✓ AI face + object detection active (BlazeFace + COCO-SSD)';
+    onReady();
+  }).catch(function(err) {
+    /* Try loading them individually — COCO-SSD alone is enough for phone; BlazeFace alone for faces */
+    var p1 = (typeof blazeface !== 'undefined') ? blazeface.load().catch(function(){ return null; }) : Promise.resolve(null);
+    var p2 = (typeof cocoSsd   !== 'undefined') ? cocoSsd.load().catch(function(){ return null; })   : Promise.resolve(null);
+    Promise.all([p1, p2]).then(function(models) {
+      _blazefaceModel = models[0];
+      _cocoSsdModel   = models[1];
+      _modelsReady    = true;
+      _modelsLoading  = false;
+      var loaded = [];
+      if (_blazefaceModel) loaded.push('BlazeFace');
+      if (_cocoSsdModel)   loaded.push('COCO-SSD');
+      if (fms) fms.textContent = loaded.length
+        ? '✓ AI detection active: ' + loaded.join(' + ')
+        : '⚠ AI models unavailable — using fallback detection';
+      onReady();
+    });
+  });
+}
+
+function initFaceDetection(vid) {
+  /* Shared canvas for frame sampling */
+  _faceDetectCanvas = document.createElement('canvas');
+  _faceDetectCanvas.width  = 320;
+  _faceDetectCanvas.height = 240;
+  _faceDetectCtx = _faceDetectCanvas.getContext('2d');
+
+  /* Try native FaceDetector (Chrome experimental) first — fastest */
+  if (typeof FaceDetector !== 'undefined') {
+    try {
+      faceDetector = new FaceDetector({ fastMode: false, maxDetectedFaces: 10 });
+      var fms = document.getElementById('face-model-s');
+      if (fms) fms.textContent = '⏳ Also loading COCO-SSD for phone detection…';
+      /* Still load COCO-SSD for phone detection alongside native face API */
+      loadMLModels(function() {
+        faceLoopInterval = setInterval(function() {
+          if (!vid || !examActive || vid.readyState < 2) return;
+          /* Face count via native API */
+          var fp = faceDetector.detect(vid);
+          var op = _cocoSsdModel ? _cocoSsdModel.detect(vid) : Promise.resolve(null);
+          Promise.all([fp, op]).then(function(r){
+            var fc = r[0] ? r[0].length : 0;
+            var pc = 0;
+            if (r[1]) {
+              pc = r[1].filter(function(p){ return p.class==='person' && p.score>=0.65; }).length;
+              checkPhoneInPredictions(r[1]);
+            }
+            applyFaceResult(Math.max(fc,pc), false);
+            /* Gaze check via native FaceDetector landmarks */
+            if (fc === 1 && pc <= 1 && r[0] && r[0][0]) {
+              var df = r[0][0];
+              var bb = df.boundingBox;
+              var lms = df.landmarks || [];
+              var nose = null, eyes = [];
+              for (var i=0;i<lms.length;i++){
+                if (lms[i].type==='nose' && lms[i].locations && lms[i].locations[0]) nose = lms[i].locations[0];
+                else if (lms[i].type==='eye' && lms[i].locations && lms[i].locations[0]) eyes.push(lms[i].locations[0]);
+              }
+              if (bb && nose) {
+                var cx = bb.x + bb.width/2, cy = bb.y + bb.height/2;
+                var ndx = (nose.x - cx) / Math.max(1, bb.width);
+                var ndy = (nose.y - cy) / Math.max(1, bb.height);
+                var ed = (eyes.length===2) ? Math.abs(eyes[0].x - eyes[1].x)/Math.max(1,bb.width) : 0.3;
+                var away = Math.abs(ndx) > 0.18 || ndy < -0.15 || ndy > 0.25 || ed < 0.22;
+                checkGazeAway(away);
+              }
+            } else {
+              gazeAwayConsecutive = 0;
+            }
+          }).catch(function() {
+            /* Native API failed this frame — use ML fallback */
+            runMLDetection(vid);
+          });
+        }, 700);
+        var fms2 = document.getElementById('face-model-s');
+        if (fms2) fms2.textContent = '✓ Native FaceDetector + COCO-SSD phone detection active';
+      });
+      return;
+    } catch(e) {}
+  }
+
+  /* Full ML path — BlazeFace (faces) + COCO-SSD (phones) */
+  loadMLModels(function() {
+    if (_blazefaceModel || _cocoSsdModel) {
+      faceLoopInterval = setInterval(function() {
+        if (!vid || !examActive || vid.readyState < 2) return;
+        runMLDetection(vid);
+      }, 700);
+    } else {
+      /* Last resort: pixel-variance fallback — only detects presence, not count */
+      startPixelFallback(vid);
+    }
+  });
+}
+
+/* Run BlazeFace + COCO-SSD on one video frame */
+function runMLDetection(vid) {
+  if (!vid || vid.readyState < 2) return;
+  try { _faceDetectCtx.drawImage(vid, 0, 0, 320, 240); } catch(e) { return; }
+  var facePromise = _blazefaceModel
+    ? _blazefaceModel.estimateFaces(_faceDetectCanvas, false /* returnTensors */)
+    : Promise.resolve(null);
+  var objPromise = _cocoSsdModel ? _cocoSsdModel.detect(vid) : Promise.resolve(null);
+
+  Promise.all([facePromise, objPromise]).then(function(results) {
+    var faces = results[0];
+    var preds = results[1];
+
+    var faceCount = 0;
+    if (faces !== null) {
+      var validFaces = faces.filter(function(f){ return (f.probability ? f.probability[0] : 1) >= 0.75; });
+      faceCount = validFaces.length;
+    }
+
+    /* CONSENSUS: count persons via COCO-SSD (different algorithm — SSD MobileNet) */
+    var personCount = 0;
+    if (preds !== null) {
+      personCount = preds.filter(function(p){ return p.class === 'person' && p.score >= 0.65; }).length;
+      checkPhoneInPredictions(preds);
+    }
+
+    /* Use max of the two algorithms — flags multi-face if EITHER detects ≥2 */
+    var consensus = Math.max(faceCount, personCount);
+    if (faces !== null || preds !== null) applyFaceResult(consensus, false);
+
+    /* Gaze / look-away check — only when exactly 1 face is present */
+    if (consensus === 1 && faces && faces.length === 1) {
+      var f = faces[0];
+      var tl = f.topLeft, br = f.bottomRight;
+      if (tl && br && f.landmarks && f.landmarks.length >= 3) {
+        var fw = br[0] - tl[0];
+        var fh = br[1] - tl[1];
+        var cx = (tl[0] + br[0]) / 2;
+        var cy = (tl[1] + br[1]) / 2;
+        var rEye = f.landmarks[0], lEye = f.landmarks[1], nose = f.landmarks[2];
+        var noseDx = (nose[0] - cx) / Math.max(1, fw);
+        var noseDy = (nose[1] - cy) / Math.max(1, fh);
+        var eyeDist = Math.abs(rEye[0] - lEye[0]) / Math.max(1, fw);
+        /* Looking away: nose horizontally far from center, vertically tilted, or eyes squeezed (head turn) */
+        var lookingAway = Math.abs(noseDx) > 0.18 || noseDy < -0.15 || noseDy > 0.25 || eyeDist < 0.22;
+        checkGazeAway(lookingAway);
+      } else {
+        checkGazeAway(false);
+      }
+    } else {
+      gazeAwayConsecutive = 0;
+    }
+  }).catch(function(e) {
+    /* TF error — skip this frame silently */
+  });
+}
+
+/* Check COCO-SSD predictions for phone-like objects */
+function checkPhoneInPredictions(preds) {
+  if (!preds || phoneDetected || !examActive) return;
+  var found = preds.filter(function(p) {
+    return PHONE_CLASSES.indexOf(p.class) !== -1 && p.score >= 0.55;
+  });
+  if (found.length > 0) {
+    var best = found.reduce(function(a,b){ return a.score > b.score ? a : b; });
+    handlePhoneDetectedML(best.class, Math.round(best.score * 100));
+  }
+}
+
+function handlePhoneDetectedML(objClass, confidence) {
+  if (phoneDetected || !examActive) return;
+  phoneDetected = true;
+  var camBox = document.getElementById('cam-box');
+  if (camBox) camBox.classList.add('phone-detected');
+  var photo = captureViolationPhoto();
+  var label = objClass === 'cell phone' ? 'Mobile Phone' : ('Unauthorized Device (' + objClass + ')');
+  var v = {
+    type: label + ' Detected',
+    time: new Date().toLocaleTimeString(),
+    exam: 'CS101',
+    severity: 'high',
+    desc: label + ' detected in camera frame (AI confidence: ' + confidence + '%). Exam auto-submitted per policy.',
+    photo: photo
+  };
+  sessionViolations.push(v);
+  violationCount++;
+  if (currentStudent.name && LIVE_SESSIONS[currentStudent.name]) {
+    LIVE_SESSIONS[currentStudent.name].violations.push(v);
+  }
+  updateSuspicionScore(35);
+  var vc = document.getElementById('viol-count'); if (vc) vc.textContent = violationCount;
+  escalateProctorBar(label + ' Detected');
+  showViolationAlert('📵 ' + label + ' Detected — Auto-Submitting!',
+    label + ' detected in your camera (AI confidence: ' + confidence + '%). Critical violation. Exam submitting in 5 seconds.', true);
+  startAutoSubmitCountdown(label + ' detected in camera');
+
+  /* Save to DB */
+  try {
+    HM_DB.violations.push({ student: currentStudent.name || 'Unknown', exam: 'CS101', ...v });
+    localStorage.setItem('hm_db', JSON.stringify(HM_DB));
+  } catch(e) {}
+}
+
+/* Pixel-variance last-resort fallback (presence only, no count) */
+function startPixelFallback(vid) {
+  var canvas = document.createElement('canvas'); canvas.width = 80; canvas.height = 60;
+  var ctx = canvas.getContext('2d');
+  var noSignalFrames = 0;
+  var fms = document.getElementById('face-model-s');
+  if (fms) fms.textContent = '⚠ Basic presence detection (AI models unavailable)';
+  faceLoopInterval = setInterval(function() {
+    if (!vid || !examActive || vid.readyState < 2) return;
+    try {
+      ctx.drawImage(vid, 0, 0, 80, 60);
+      var data = ctx.getImageData(0, 0, 80, 60).data;
+      var brightness = 0, variance = 0, total = data.length / 4;
+      for (var i = 0; i < data.length; i += 4) brightness += (data[i]*.299 + data[i+1]*.587 + data[i+2]*.114);
+      brightness /= total;
+      for (var i = 0; i < data.length; i += 4) { var lum = data[i]*.299+data[i+1]*.587+data[i+2]*.114; variance += (lum-brightness)*(lum-brightness); }
+      variance /= total;
+      if (variance < 18) { noSignalFrames++; if (noSignalFrames >= 3) applyFaceResult(0, false); }
+      else { noSignalFrames = 0; applyFaceResult(1, false); }
+    } catch(e) {}
+  }, 2500);
+}
+
+function stopCam() {
+  clearInterval(faceLoopInterval);
+  clearInterval(phoneDetectionInterval);
+  clearAutoSubmitCountdown();
+  faceLoopInterval = null; phoneDetected = false;
+  stopExamRecording();
+  if (camStream) { camStream.getTracks().forEach(function(t){ t.stop(); }); camStream = null; }
+  /* Release video element to fully free the camera device */
+  var vid = document.getElementById('cam-video');
+  if (vid) { vid.srcObject = null; vid.style.display = 'none'; }
+  /* Clean up detection canvas */
+  _faceDetectCanvas = null; _faceDetectCtx = null;
+  /* Dispose any pending TF tensors */
+  try { if (typeof tf !== 'undefined') tf.engine().startScope(); } catch(e) {}
+}
+
+/* =====================================================
+   EXAM SESSION RECORDING — captured for admin review
+===================================================== */
+function startExamRecording(stream) {
+  try {
+    if (typeof MediaRecorder === 'undefined' || !stream) return;
+    examRecChunks = [];
+    if (examRecBlobUrl) { try { URL.revokeObjectURL(examRecBlobUrl); } catch(e){} examRecBlobUrl = null; }
+    var mimeCandidates = ['video/webm;codecs=vp9','video/webm;codecs=vp8','video/webm','video/mp4'];
+    var mime = '';
+    for (var i = 0; i < mimeCandidates.length; i++) {
+      if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(mimeCandidates[i])) { mime = mimeCandidates[i]; break; }
+    }
+    var opts = mime ? { mimeType: mime, videoBitsPerSecond: 250000 } : { videoBitsPerSecond: 250000 };
+    examRecorder = new MediaRecorder(stream, opts);
+    examRecorder.ondataavailable = function(e) { if (e.data && e.data.size > 0) examRecChunks.push(e.data); };
+    examRecorder.onstop = function() {
+      try {
+        var blob = new Blob(examRecChunks, { type: (examRecorder && examRecorder.mimeType) || 'video/webm' });
+        examRecBlobUrl = URL.createObjectURL(blob);
+        if (currentStudent && currentStudent.name && LIVE_SESSIONS[currentStudent.name]) {
+          LIVE_SESSIONS[currentStudent.name].recordingUrl = examRecBlobUrl;
+          LIVE_SESSIONS[currentStudent.name].recordingMime = blob.type;
+          LIVE_SESSIONS[currentStudent.name].recordingSize = blob.size;
+        }
+      } catch(e) {}
+    };
+    examRecorder.start(1000);
+  } catch(e) { examRecorder = null; }
+}
+function stopExamRecording() {
+  try {
+    if (examRecorder && examRecorder.state !== 'inactive') examRecorder.stop();
+  } catch(e) {}
+  examRecorder = null;
+}
+
+/* =====================================================
+   EXAM TIMER
+===================================================== */
+function startTimer() {
+  clearInterval(examTimer);
+  examTimer = setInterval(function() {
+    if (!examActive) { clearInterval(examTimer); return; }
+    examTimeLeft--;
+    var m = Math.floor(examTimeLeft / 60);
+    var s = examTimeLeft % 60;
+    var td = document.getElementById('exam-timer');
+    if (td) {
+      td.textContent = (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s;
+      td.className = 'timer-display' + (examTimeLeft < 300 ? ' timer-danger' : examTimeLeft < 600 ? ' timer-warn' : '');
+    }
+    if (examTimeLeft <= 0) { clearInterval(examTimer); submitExam(true); }
+  }, 1000);
+}
+
+function pickAns(qId, j) {
+  examAnswers[qId] = j;
+  var q = QUESTIONS.find(function(x){ return x.id === qId; });
+  if (q) {
+    q.opts.forEach(function(_, k){
+      var el = document.getElementById('opt-' + qId + '-' + k);
+      if (el) { el.classList.toggle('sel', k === j); el.querySelector('.q-radio-in').style.display = k===j?'block':'none'; }
+    });
+  }
+  var nav = document.getElementById('nav-' + qId);
+  if (nav) nav.classList.add('answered');
+  var count = Object.keys(examAnswers).length;
+  var ac = document.getElementById('ans-count'); if (ac) ac.textContent = count;
+  var ab = document.getElementById('ans-bar'); if (ab) ab.style.width = (count / QUESTIONS.length * 100) + '%';
+}
+
+function scrollToQ(i) {
+  var blocks = document.querySelectorAll('.q-block');
+  if (blocks[i]) blocks[i].scrollIntoView({ behavior:'smooth', block:'center' });
+}
+
+/* =====================================================
+   SUBMIT EXAM
+===================================================== */
+function submitExam(autoSubmit) {
+  clearInterval(examTimer);
+  stopCam();
+  stopExamMonitoring();
+  stopWaveform();
+  examActive = false;
+  closeToast();
+
+  var correct = 0;
+  QUESTIONS.forEach(function(q){ if (examAnswers[q.id] === q.ans) correct++; });
+  var pct   = Math.round(correct / QUESTIONS.length * 100);
+  var grade = pct >= 90 ? 'A' : pct >= 80 ? 'B+' : pct >= 70 ? 'B' : pct >= 60 ? 'C' : 'F';
+
+  if (currentStudent.name && LIVE_SESSIONS[currentStudent.name]) {
+    var ls = LIVE_SESSIONS[currentStudent.name];
+    ls.status = 'online'; ls.score = pct; ls.grade = grade;
+    ls.examSubmitted = true; ls.submitTime = new Date().toLocaleTimeString();
+    ls.autoSubmitted = autoSubmit;
+    try { localStorage.setItem('hm_sessions', JSON.stringify(LIVE_SESSIONS)); } catch(e){}
+  }
+
+  var scoreColor = pct >= 70 ? 'var(--green)' : pct >= 50 ? 'var(--amber)' : 'var(--red)';
+  document.getElementById('s-content').innerHTML =
+    '<div style="max-width:580px;margin:0 auto;text-align:center;padding:34px 0" class="page-enter">' +
+      '<div style="font-size:64px;margin-bottom:16px;animation:hexFloat 2s ease infinite">' + (autoSubmit ? '⛔' : pct >= 70 ? '✅' : '⚠️') + '</div>' +
+      '<div class="page-title" style="font-size:22px;margin-bottom:6px">' + (autoSubmit ? 'Exam Auto-Submitted' : 'Exam Submitted!') + '</div>' +
+      (autoSubmit
+        ? '<div style="font-size:13px;color:var(--red);margin:8px 0 28px;font-weight:700;background:rgba(239,68,68,0.1);padding:12px 18px;border-radius:12px;border:1px solid rgba(239,68,68,0.3)">Auto-submitted due to ' + (phoneDetected ? '📵 phone detected' : violationCount + ' proctoring violations') + '</div>'
+        : '<div style="font-size:13px;color:var(--text3);margin:6px 0 28px">Answers recorded and submitted successfully.</div>') +
+      '<div class="card" style="text-align:left;margin-bottom:22px">' +
+        '<div style="text-align:center;padding:24px 0 20px">' +
+          '<div style="font-size:11px;color:var(--text3);margin-bottom:8px;text-transform:uppercase;font-weight:700;letter-spacing:.7px">Your Score</div>' +
+          '<div style="font-size:64px;font-weight:800;letter-spacing:-3px;color:' + scoreColor + ';font-family:\'JetBrains Mono\',monospace;text-shadow:0 0 30px currentColor;animation:scoreUp .5s ease">' + pct + '%</div>' +
+          '<div style="font-size:14px;color:var(--text2);margin-top:6px">' + correct + ' / ' + QUESTIONS.length + ' correct &nbsp;·&nbsp; Grade: <strong style="color:var(--cyan)">' + grade + '</strong></div>' +
+        '</div>' +
+        '<div class="divider"></div>' +
+        '<div style="display:flex;align-items:center;justify-content:center;gap:20px;padding:12px 0">' +
+          buildSuspicionGauge(suspicionScore) +
+          '<div><div style="font-size:12px;font-weight:700;color:var(--text2)">Final Suspicion</div><div style="font-size:11px;color:var(--text3);margin-top:3px">Based on ' + sessionViolations.length + ' violation(s)</div></div>' +
+        '</div>' +
+        (sessionViolations.length > 0
+          ? '<div class="divider"></div><div style="padding:4px 0 10px"><div style="font-size:12px;font-weight:700;color:var(--red);margin-bottom:8px">⚠ Violations Recorded (' + sessionViolations.length + ')</div>' +
+            sessionViolations.map(function(v){ return '<div style="font-size:11px;color:var(--text2);padding:6px 0;border-bottom:1px solid var(--border);display:flex;justify-content:space-between"><span>⚠ ' + v.type + '</span><span style="color:var(--text3);font-family:\'JetBrains Mono\',monospace;font-size:10px">' + v.time + '</span></div>'; }).join('') + '</div>'
+          : '<div class="divider"></div><div style="text-align:center;padding:10px;color:var(--green);font-weight:700">✅ No violations recorded — clean exam!</div>') +
+        '<div class="divider"></div>' +
+        QUESTIONS.map(function(q, i){
+          var userAns = examAnswers[q.id];
+          return '<div style="padding:14px 0;border-bottom:1px solid var(--border)">' +
+            '<div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:10px">Q' + (i+1) + '. ' + q.q + '</div>' +
+            q.opts.map(function(opt, j){
+              var cls = '';
+              if (j === q.ans) cls = 'correct';
+              else if (userAns === j) cls = 'wrong';
+              return '<div class="q-opt ' + cls + '" style="cursor:default;margin-bottom:6px">' +
+                '<div class="q-radio"><div class="q-radio-in" style="' + (j===q.ans||userAns===j?'display:block':'') + '"></div></div>' +
+                opt +
+                (j === q.ans ? ' <span style="margin-left:auto;font-size:11px;font-weight:700;color:var(--green)">✓ Correct</span>' : '') +
+                (userAns === j && j !== q.ans ? ' <span style="margin-left:auto;font-size:11px;font-weight:700;color:var(--red)">Your answer</span>' : '') +
+              '</div>';
+            }).join('') +
+          '</div>';
+        }).join('') +
+      '</div>' +
+      '<button class="btn-primary" style="padding:12px 32px;font-size:14px" onclick="renderSDash()">← Back to Dashboard</button>' +
+    '</div>';
+}
+
+/* =====================================================
+   ADMIN NAVIGATION
+===================================================== */
+function aNav(page, el) {
+  document.querySelectorAll('#admin-app .si').forEach(function(i){ i.classList.remove('active'); });
+  el.classList.add('active');
+  if      (page === 'adash')         renderADash();
+  else if (page === 'astudents')     renderAStudents();
+  else if (page === 'aviolations')   renderAViolations();
+  else if (page === 'aexams')        renderAExams();
+  else if (page === 'areports')      renderAReports();
+  else if (page === 'aloginhistory') renderALoginHistory();
+  else if (page === 'amonitor')      renderAMonitor();
+}
+
+function getLiveSessions() {
+  /* Only return sessions where the student is currently online or in exam, not logged out */
+  return Object.values(LIVE_SESSIONS).filter(function(ls){ return ls.status !== 'offline'; });
+}
+function getAllSessions() { return Object.values(LIVE_SESSIONS); }
+
+function getAllViolations() {
+  var all = [];
+  getAllSessions().forEach(function(ls){ ls.violations.forEach(function(v){ all.push({ student:ls.name, college:ls.college, v:v, isLive:ls.status!=='offline' }); }); });
+  STUDENTS.forEach(function(s){ s.violations.forEach(function(v){ all.push({ student:s.name, college:s.college, v:v, isLive:false }); }); });
+  return all;
+}
+
+/* =====================================================
+   ADMIN PAGES
+===================================================== */
+function renderADash() {
+  var live      = getLiveSessions();
+  var allViols  = getAllViolations();
+  var liveOnline = live.filter(function(ls){ return ls.status==='online'||ls.status==='exam'; }).length;
+
+  /* Violation type breakdown */
+  var violTypes = {};
+  allViols.forEach(function(item){ violTypes[item.v.type] = (violTypes[item.v.type]||0) + 1; });
+
+  document.getElementById('a-content').innerHTML =
+    '<div class="page-enter">' +
+    '<div class="page-title">Command Center</div>' +
+    '<div class="page-sub">Real-time system overview &nbsp;·&nbsp; All student activity and violations</div>' +
+
+    (live.length > 0
+      ? '<div style="background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.25);border-radius:14px;padding:14px 18px;margin-bottom:20px;display:flex;align-items:center;gap:14px;animation:cyberBorder 3s ease infinite">' +
+          '<span class="live-dot" style="width:11px;height:11px;box-shadow:0 0 8px var(--green)"></span>' +
+          '<div>' +
+            '<div style="font-size:13px;font-weight:800;color:var(--green)">' + live.length + ' Student' + (live.length>1?'s':'') + ' Currently Online</div>' +
+            '<div style="font-size:12px;color:rgba(34,197,94,0.7);margin-top:2px">' +
+              live.map(function(ls){ return ls.name + (ls.status==='exam'?'&nbsp;<span class="badge badge-amber" style="font-size:9px">IN EXAM</span>':''); }).join('  ·  ') +
+            '</div>' +
+          '</div>' +
+        '</div>'
+      : '') +
+
+    '<div class="stats-grid">' +
+      statCard('Total Students', STUDENTS.filter(function(s){ return s.exams>0; }).length + live.filter(function(ls){ return ls.examStarted; }).length, 'Attempted exam', 'var(--cyan)') +
+      statCard('Online Now', liveOnline, 'Live sessions', 'var(--green)') +
+      statCard('Violations', allViols.length, allViols.filter(function(x){ return x.v.severity==='high'; }).length + ' high severity', 'var(--red)') +
+      statCard('Active Exams', '2', 'CS101, HIST101', 'var(--blue)') +
+    '</div>' +
+
+    '<div class="two-col" style="margin-bottom:18px">' +
+      /* Student Activity */
+      '<div class="card">' +
+        '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">' +
+          '<div class="section-title" style="margin-bottom:0">Student Activity</div>' +
+          (live.length > 0 ? '<span class="badge badge-live">' + live.length + ' LIVE</span>' : '') +
+        '</div>' +
+        live.filter(function(ls){ return ls.examStarted; }).map(function(ls){
+          var photoHtml = ls.profilePhoto
+            ? '<div style="width:34px;height:34px;border-radius:50%;overflow:hidden;flex-shrink:0;border:2px solid var(--green)"><img src="' + ls.profilePhoto + '" style="width:100%;height:100%;object-fit:cover" /></div>'
+            : '<div class="avatar" style="background:linear-gradient(135deg,var(--green),#15803d);font-size:11px">' + ls.name.split(' ').map(function(n){ return n[0]; }).join('') + '</div>';
+          return '<div style="display:flex;align-items:center;justify-content:space-between;padding:11px 12px;border-radius:12px;background:rgba(34,197,94,0.06);border:1px solid rgba(34,197,94,0.15);margin-bottom:8px">' +
+            '<div style="display:flex;align-items:center;gap:10px">' +
+              photoHtml +
+              '<div>' +
+                '<div style="font-weight:800;font-size:13px;color:var(--text)">' + ls.name + '&nbsp;<span class="live-dot" style="width:6px;height:6px"></span></div>' +
+                '<div style="font-size:11px;color:var(--text3)">' + ls.college + ' · ' + ls.loginTime + '</div>' +
+              '</div>' +
+            '</div>' +
+            '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">' +
+              (ls.violations.length ? '<span class="badge badge-red">' + ls.violations.length + ' viol</span>' : '') +
+              '<span class="badge ' + (ls.status==='exam'?'badge-amber':'badge-green') + '">' + ls.status + '</span>' +
+            '</div>' +
+          '</div>';
+        }).join('') +
+        STUDENTS.filter(function(s){ return s.exams>0; }).map(function(s){
+          return '<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border)">' +
+            '<div style="display:flex;align-items:center;gap:10px">' +
+              '<div class="avatar" style="background:var(--bg3);font-size:11px">' + s.name.split(' ').map(function(n){ return n[0]; }).join('') + '</div>' +
+              '<div><div style="font-weight:600;font-size:13px;color:var(--text)">' + s.name + '</div><div style="font-size:11px;color:var(--text3)">' + s.college + '</div></div>' +
+            '</div>' +
+            '<div style="display:flex;align-items:center;gap:6px">' +
+              (s.violations.length ? '<span class="badge badge-red">' + s.violations.length + '</span>' : '') +
+              '<span class="badge badge-gray">offline</span>' +
+            '</div>' +
+          '</div>';
+        }).join('') +
+      '</div>' +
+
+      /* Violation Feed */
+      '<div class="card">' +
+        '<div class="section-title">Recent Violations</div>' +
+        (function(){
+          var all = getAllViolations();
+          if (!all.length) return '<div style="font-size:13px;color:var(--text3);padding:20px 0;text-align:center">✅ No violations recorded yet.</div>';
+          return all.slice(0,6).map(function(item){
+            var sev = item.v.severity;
+            return '<div class="viol-row" style="' + (item.isLive ? 'border-color:rgba(239,68,68,0.3);background:rgba(239,68,68,0.04);' : '') + '">' +
+              '<div class="viol-dot" style="background:' + (sev==='high'?'var(--red)':'var(--amber)') + ';box-shadow:0 0 6px currentColor"></div>' +
+              '<div style="flex:1">' +
+                '<div style="font-size:13px;font-weight:700;color:var(--text)">' + item.v.type +
+                  (item.isLive ? '&nbsp;<span class="badge badge-live" style="font-size:9px">LIVE</span>' : '') +
+                '</div>' +
+                '<div style="font-size:11px;color:var(--text3);margin-top:2px">' + item.student + ' &nbsp;·&nbsp; ' + item.v.exam + '</div>' +
+              '</div>' +
+              '<div style="text-align:right">' +
+                '<span class="badge ' + (sev==='high'?'badge-red':'badge-amber') + '" style="font-size:9px">' + sev + '</span>' +
+                '<div style="font-size:10px;color:var(--text3);margin-top:4px;font-family:\'JetBrains Mono\',monospace">' + item.v.time + '</div>' +
+              '</div>' +
+            '</div>';
+          }).join('');
+        })() +
+      '</div>' +
+    '</div>' +
+
+    /* Violation Type Bar Chart */
+    (Object.keys(violTypes).length > 0
+      ? '<div class="card">' +
+          '<div class="section-title">Violation Breakdown</div>' +
+          '<div style="display:flex;flex-direction:column;gap:8px">' +
+          Object.entries(violTypes).map(function(pair){
+            var t = pair[0], cnt = pair[1];
+            var pct = Math.round(cnt / allViols.length * 100);
+            return '<div>' +
+              '<div style="display:flex;justify-content:space-between;margin-bottom:4px">' +
+                '<span style="font-size:12px;color:var(--text2);font-weight:600">' + t + '</span>' +
+                '<span style="font-size:12px;color:var(--text3);font-family:\'JetBrains Mono\',monospace">' + cnt + ' (' + pct + '%)</span>' +
+              '</div>' +
+              '<div style="height:6px;background:var(--border);border-radius:4px;overflow:hidden">' +
+                '<div style="height:100%;width:' + pct + '%;background:linear-gradient(90deg,var(--red),var(--amber));border-radius:4px;transition:width 1s ease;box-shadow:0 0 6px rgba(239,68,68,0.4)"></div>' +
+              '</div>' +
+            '</div>';
+          }).join('') +
+          '</div>' +
+        '</div>'
+      : '') +
+    '</div>';
+}
+
+function statCard(label, value, sub, color) {
+  return '<div class="stat-card anim-fade-up delay-1">' +
+    '<div class="stat-label">' + label + '</div>' +
+    '<div class="stat-value" style="color:' + color + '">' + value + '</div>' +
+    (sub ? '<div class="stat-sub">' + sub + '</div>' : '') +
+  '</div>';
+}
+
+function renderAStudents() {
+  var live = getLiveSessions(); /* online/exam only */
+  var allSess = getAllSessions(); /* includes offline */
+  document.getElementById('a-content').innerHTML =
+    '<div class="page-enter">' +
+    '<div class="page-title">All Students</div>' +
+    '<div class="page-sub">Student registry and proctoring records</div>' +
+    '<div class="card">' +
+      '<table><thead><tr><th>Student</th><th>College</th><th>Exams</th><th>Avg Score</th><th>Violations</th><th>Status</th><th></th></tr></thead><tbody>' +
+      allSess.map(function(ls){
+        var isOnline = ls.status !== 'offline';
+        var photoHtml = ls.profilePhoto
+          ? '<div style="width:28px;height:28px;border-radius:50%;overflow:hidden;flex-shrink:0;border:1.5px solid ' + (isOnline?'var(--cyan)':'var(--border2)') + '"><img src="' + ls.profilePhoto + '" style="width:100%;height:100%;object-fit:cover" /></div>'
+          : '<div class="avatar" style="background:' + (isOnline?'linear-gradient(135deg,var(--green),#15803d)':'var(--bg3)') + ';font-size:11px;width:28px;height:28px">' + ls.name.split(' ').map(function(n){return n[0];}).join('') + '</div>';
+        return '<tr>' +
+          '<td><div style="display:flex;align-items:center;gap:9px">' + photoHtml + '<div><div style="font-weight:700;color:var(--text)">' + ls.name + '</div>' +
+            (isOnline?'<div style="font-size:10px;color:var(--green);font-weight:600">● LIVE</div>':'<div style="font-size:10px;color:var(--text3);font-weight:500">○ Session ended</div>') + '</div></div></td>' +
+          '<td style="color:var(--text3)">' + ls.college + '</td>' +
+          '<td>' + (ls.examSubmitted?'1':'0') + '</td>' +
+          '<td style="font-family:\'JetBrains Mono\',monospace;color:' + (ls.score!=null?(ls.score>=70?'var(--green)':'var(--red)'):'var(--text3)') + '">' + (ls.score!=null?ls.score+'%':'—') + '</td>' +
+          '<td><span class="badge ' + (ls.violations.length?'badge-red':'badge-green') + '">' + ls.violations.length + '</span></td>' +
+          '<td><span class="badge ' + (ls.status==='exam'?'badge-amber':isOnline?'badge-green':'badge-gray') + '">' + ls.status + '</span></td>' +
+          '<td><button class="btn-outline btn-sm" onclick="viewLiveStudent(\'' + ls.name + '\')">View →</button></td>' +
+        '</tr>';
+      }).join('') +
+      STUDENTS.filter(function(s){ return s.exams>0; }).map(function(s){
+        return '<tr>' +
+          '<td><div style="display:flex;align-items:center;gap:9px"><div class="avatar" style="width:28px;height:28px;font-size:11px">' + s.name.split(' ').map(function(n){return n[0];}).join('') + '</div><div style="font-weight:600;color:var(--text)">' + s.name + '</div></div></td>' +
+          '<td style="color:var(--text3)">' + s.college + '</td>' +
+          '<td>' + s.exams + '</td>' +
+          '<td style="font-family:\'JetBrains Mono\',monospace;color:' + (s.avgScore>=70?'var(--green)':'var(--red)') + '">' + s.avgScore + '%</td>' +
+          '<td><span class="badge ' + (s.violations.length?'badge-red':'badge-green') + '">' + s.violations.length + '</span></td>' +
+          '<td><span class="badge badge-gray">offline</span></td>' +
+          '<td><button class="btn-outline btn-sm" onclick="viewStudent(' + s.id + ')">View →</button></td>' +
+        '</tr>';
+      }).join('') +
+      '</tbody></table>' +
+    '</div>' +
+    '</div>';
+}
+
+function viewLiveStudent(name) {
+  var ls = LIVE_SESSIONS[name]; if (!ls) return;
+  var isOnline = ls.status !== 'offline';
+  _renderStudentDetail({ name:ls.name,college:ls.college,dob:ls.dob,exams:ls.examSubmitted?1:0,avgScore:ls.score!=null?ls.score:0,status:ls.status,violations:ls.violations||[],isLive:isOnline,loginTime:ls.loginTime,examName:ls.examName,score:ls.score,grade:ls.grade,submitTime:ls.submitTime,autoSubmitted:ls.autoSubmitted,profilePhoto:ls.profilePhoto,recordingUrl:ls.recordingUrl,recordingMime:ls.recordingMime,recordingSize:ls.recordingSize });
+}
+
+function viewStudent(id) {
+  var s = STUDENTS.find(function(x){ return x.id===id; }); if (!s) return;
+  _renderStudentDetail(s);
+}
+
+function _renderStudentDetail(s) {
+  var violScore = Math.min(100, (s.violations||[]).length * 15);
+  var profilePhoto = s.profilePhoto || (LIVE_SESSIONS[s.name] && LIVE_SESSIONS[s.name].profilePhoto) || null;
+  var avatarHtml = profilePhoto
+    ? '<div style="width:56px;height:56px;border-radius:50%;overflow:hidden;flex-shrink:0;border:2.5px solid ' + (s.isLive?'var(--green)':'var(--border2)') + ';box-shadow:0 4px 14px rgba(0,0,0,0.12)"><img src="' + profilePhoto + '" style="width:100%;height:100%;object-fit:cover" /></div>'
+    : '<div class="avatar" style="width:56px;height:56px;font-size:18px;' + (s.isLive?'background:linear-gradient(135deg,var(--green),#15803d)':'') + '">' + s.name.split(' ').map(function(n){return n[0];}).join('') + '</div>';
+  document.getElementById('a-content').innerHTML =
+    '<div class="page-enter">' +
+    '<div style="display:flex;align-items:center;gap:12px;margin-bottom:22px">' +
+      '<button class="btn-outline btn-sm" onclick="renderAStudents()">← Back</button>' +
+      '<div class="page-title" style="margin-bottom:0">' + s.name + (s.isLive?'&nbsp;<span class="badge badge-live">LIVE</span>':'') + '</div>' +
+    '</div>' +
+    '<div class="two-col">' +
+      '<div class="card">' +
+        '<div style="display:flex;align-items:center;gap:16px;margin-bottom:20px">' +
+          avatarHtml +
+          '<div>' +
+            '<div style="font-size:18px;font-weight:800;color:var(--text)">' + s.name + '</div>' +
+            '<div style="font-size:12px;color:var(--text3);margin-top:3px">' + s.college + '</div>' +
+            (s.isLive?'<div style="font-size:11px;color:var(--green);font-weight:700;margin-top:3px">● Online since ' + (s.loginTime||'') + '</div>':'') +
+          '</div>' +
+        '</div>' +
+        '<div class="divider"></div>' +
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px">' +
+          '<div class="stat-card" style="padding:12px 14px"><div class="stat-label">Exams</div><div class="stat-value" style="font-size:24px">' + s.exams + '</div></div>' +
+          '<div class="stat-card" style="padding:12px 14px"><div class="stat-label">Avg Score</div><div class="stat-value" style="font-size:24px;color:' + (s.avgScore>=70?'var(--green)':'var(--red)') + '">' + (s.avgScore||(s.score!=null?s.score:0)) + '%</div></div>' +
+        '</div>' +
+        '<div style="text-align:center">' +
+          buildSuspicionGauge(violScore) +
+          '<div style="font-size:11px;color:var(--text3);font-weight:600;letter-spacing:.5px">SUSPICION SCORE</div>' +
+        '</div>' +
+        (s.isLive&&s.examName
+          ? '<div class="divider"></div><div style="background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.25);border-radius:12px;padding:12px 14px"><div style="font-size:12px;font-weight:800;color:var(--amber);margin-bottom:6px">📝 Exam Session</div><div style="font-size:12px;color:var(--text2)">Exam: <strong>' + (s.examName||'—') + '</strong></div>' + (s.submitTime?'<div style="font-size:12px;color:var(--text2);margin-top:3px">Submitted: <strong>' + s.submitTime + '</strong>' + (s.autoSubmitted?'&nbsp;<span class="badge badge-red" style="font-size:9px">AUTO</span>':'') + '</div>':'<div style="font-size:12px;color:var(--amber);margin-top:3px;font-weight:600">⟳ In progress...</div>') + (s.score!=null?'<div style="font-size:15px;color:' + (s.score>=70?'var(--green)':'var(--red)') + ';font-weight:800;margin-top:6px;font-family:\'JetBrains Mono\',monospace">Score: ' + s.score + '% (' + (s.grade||'—') + ')</div>':'') + '</div>'
+          : '') +
+      '</div>' +
+      '<div class="card">' +
+        '<div class="section-title">Violation Details</div>' +
+        ((s.violations||[]).length===0
+          ? '<div style="padding:28px;text-align:center;color:var(--green);font-size:13px">✅ No violations recorded.</div>'
+          : (s.violations||[]).map(function(v){
+              return '<div class="viol-detail-card">' +
+                '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">' +
+                  '<div style="font-size:13px;font-weight:800;color:' + (v.severity==='high'?'#f87171':'#fbbf24') + '">' + v.type + '</div>' +
+                  '<span class="badge ' + (v.severity==='high'?'badge-red':'badge-amber') + '">' + v.severity + '</span>' +
+                '</div>' +
+                '<div style="font-size:12px;color:var(--text2);margin-bottom:6px">' + v.desc + '</div>' +
+                '<div style="font-size:11px;color:var(--text3);font-family:\'JetBrains Mono\',monospace;margin-bottom:' + (v.photo?'10px':'0') + '">Exam: ' + v.exam + '  ·  ' + v.time + '</div>' +
+                (v.photo?'<div style="margin-top:8px"><div style="font-size:10px;font-weight:700;color:var(--red);text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px">📷 Capture at violation</div><img src="' + v.photo + '" style="width:100%;max-width:280px;border-radius:8px;border:1.5px solid rgba(239,68,68,0.4);display:block" /></div>':'') +
+              '</div>';
+            }).join('')
+        ) +
+      '</div>' +
+      '<div class="card">' +
+        '<div class="section-title">📹 Session Recording</div>' +
+        (s.recordingUrl
+          ? '<video controls preload="metadata" src="' + s.recordingUrl + '" style="width:100%;border-radius:10px;border:1.5px solid var(--border2);background:#000;display:block"></video>' +
+            '<div style="display:flex;align-items:center;justify-content:space-between;margin-top:10px;font-size:11px;color:var(--text3);font-family:\'JetBrains Mono\',monospace">' +
+              '<span>' + (s.recordingMime || 'video/webm') + (s.recordingSize ? '  ·  ' + (Math.round(s.recordingSize/1024) + ' KB') : '') + '</span>' +
+              '<a href="' + s.recordingUrl + '" download="' + (s.name||'session').replace(/\s+/g,'_') + '_recording.webm" class="btn-outline btn-sm" style="text-decoration:none">⬇ Download</a>' +
+            '</div>'
+          : '<div style="padding:24px;text-align:center;color:var(--text3);font-size:12px">' + (s.isLive ? '⟳ Recording in progress — available after submission.' : 'No recording captured for this session.') + '</div>') +
+      '</div>' +
+    '</div>' +
+    '</div>';
+}
+
+function renderAViolations() {
+  var all = getAllViolations();
+  var names = {}; all.forEach(function(x){ names[x.student]=1; });
+  document.getElementById('a-content').innerHTML =
+    '<div class="page-enter">' +
+    '<div class="page-title">All Violations</div>' +
+    '<div class="page-sub">Every flagged incident across all exam sessions</div>' +
+    '<div class="stats-grid" style="grid-template-columns:repeat(3,1fr)">' +
+      statCard('Total', all.length, 'All incidents', 'var(--red)') +
+      statCard('High Severity', all.filter(function(x){return x.v.severity==='high';}).length, 'Critical flags', 'var(--red)') +
+      statCard('Students Flagged', Object.keys(names).length, 'Unique students', 'var(--amber)') +
+    '</div>' +
+    (all.length===0
+      ? '<div class="card" style="text-align:center;padding:48px;color:var(--green)">✅ No violations recorded yet.</div>'
+      : '<div style="display:flex;flex-direction:column;gap:10px">' +
+          all.map(function(item){
+            return '<div class="card" style="padding:16px;' + (item.isLive?'border-color:rgba(239,68,68,0.3);':'') + '">' +
+              '<div style="display:flex;align-items:flex-start;gap:14px">' +
+                (item.v.photo?'<img src="' + item.v.photo + '" style="width:90px;height:68px;object-fit:cover;border-radius:8px;border:1.5px solid rgba(239,68,68,0.4);flex-shrink:0" />':'') +
+                '<div style="flex:1">' +
+                  '<div style="display:flex;align-items:center;gap:8px;margin-bottom:5px">' +
+                    '<span style="font-size:14px;font-weight:800;color:' + (item.v.severity==='high'?'#f87171':'#fbbf24') + '">' + item.v.type + '</span>' +
+                    '<span class="badge ' + (item.v.severity==='high'?'badge-red':'badge-amber') + '">' + item.v.severity + '</span>' +
+                    (item.isLive?'<span class="badge badge-live" style="font-size:9px">LIVE</span>':'') +
+                  '</div>' +
+                  '<div style="font-size:12px;color:var(--text2);margin-bottom:5px">' + item.v.desc + '</div>' +
+                  '<div style="font-size:11px;color:var(--text3);font-family:\'JetBrains Mono\',monospace">' + item.student + ' &nbsp;·&nbsp; ' + item.v.exam + ' &nbsp;·&nbsp; ' + item.v.time + '</div>' +
+                '</div>' +
+              '</div>' +
+            '</div>';
+          }).join('') +
+        '</div>') +
+    '</div>';
+}
+
+function renderAExams() {
+  document.getElementById('a-content').innerHTML =
+    '<div class="page-enter">' +
+    '<div class="page-title">Exam Management</div>' +
+    '<div class="page-sub">Registered exams and their status</div>' +
+    '<div style="display:flex;flex-direction:column;gap:14px">' +
+    EXAMS.map(function(e){
+      return '<div class="card" style="' + (e.status==='active'?'border-color:rgba(34,197,94,0.3);':'') + '">' +
+        '<div style="display:flex;align-items:flex-start;justify-content:space-between">' +
+          '<div>' +
+            '<div style="font-size:16px;font-weight:800;color:var(--text);margin-bottom:4px">' + e.title + '</div>' +
+            '<div style="font-size:12px;color:var(--text3);margin-bottom:10px;font-family:\'JetBrains Mono\',monospace">Code: <span style="color:var(--cyan)">' + e.code + '</span> &nbsp;·&nbsp; ' + e.duration + ' min &nbsp;·&nbsp; ' + e.questions + ' Qs</div>' +
+            '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+              '<span class="badge badge-cyan">👥 ' + e.enrolled + ' enrolled</span>' +
+              '<span class="badge badge-gray">📅 ' + e.date + '</span>' +
+            '</div>' +
+          '</div>' +
+          '<span class="badge ' + (e.status==='active'?'badge-green':'badge-gray') + '" style="font-size:12px;padding:6px 14px">' + e.status.toUpperCase() + '</span>' +
+        '</div>' +
+      '</div>';
+    }).join('') +
+    '</div></div>';
+}
+
+function renderAReports() {
+  document.getElementById('a-content').innerHTML =
+    '<div class="page-enter">' +
+    '<div class="page-title">Reports & Export</div>' +
+    '<div class="page-sub">Generate and download comprehensive proctoring reports</div>' +
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px">' +
+
+      '<div class="card cyber-card" style="text-align:center;padding:32px 20px">' +
+        '<div style="font-size:40px;margin-bottom:14px">🛡</div>' +
+        '<div style="font-size:16px;font-weight:800;color:var(--text);margin-bottom:8px">Violation Report</div>' +
+        '<div style="font-size:12px;color:var(--text3);margin-bottom:20px;line-height:1.6">Complete violation log with screenshots, timestamps, severity analysis, and suspicion scores.</div>' +
+        '<button class="btn-primary" style="width:100%;padding:12px" onclick="generateViolationPDF()">📄 Download PDF</button>' +
+      '</div>' +
+
+      '<div class="card cyber-card" style="text-align:center;padding:32px 20px">' +
+        '<div style="font-size:40px;margin-bottom:14px">📊</div>' +
+        '<div style="font-size:16px;font-weight:800;color:var(--text);margin-bottom:8px">Performance Report</div>' +
+        '<div style="font-size:12px;color:var(--text3);margin-bottom:20px;line-height:1.6">Student score summaries, grade distributions, and comparative analytics.</div>' +
+        '<button class="btn-primary" style="width:100%;padding:12px" onclick="generatePerformancePDF()">📄 Download PDF</button>' +
+      '</div>' +
+
+      '<div class="card cyber-card" style="text-align:center;padding:32px 20px">' +
+        '<div style="font-size:40px;margin-bottom:14px">📋</div>' +
+        '<div style="font-size:16px;font-weight:800;color:var(--text);margin-bottom:8px">Exam Audit Log</div>' +
+        '<div style="font-size:12px;color:var(--text3);margin-bottom:20px;line-height:1.6">Complete exam session log including login times, submission details, and auto-submit events.</div>' +
+        '<button class="btn-primary" style="width:100%;padding:12px" onclick="generateAuditPDF()">📄 Download PDF</button>' +
+      '</div>' +
+
+      '<div class="card" style="text-align:center;padding:32px 20px">' +
+        '<div style="font-size:40px;margin-bottom:14px">💾</div>' +
+        '<div style="font-size:16px;font-weight:800;color:var(--text);margin-bottom:8px">Data Storage</div>' +
+        '<div style="font-size:12px;color:var(--text3);margin-bottom:20px;line-height:1.6">All violation logs, snapshots, and scores are stored in LocalStorage / IndexedDB during the session.</div>' +
+        '<div style="font-size:11px;background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.2);border-radius:8px;padding:10px;color:var(--green);font-weight:600">✅ Data persistence active</div>' +
+      '</div>' +
+    '</div>' +
+
+    /* Summary stats */
+    '<div class="card">' +
+      '<div class="section-title">Session Summary</div>' +
+      (function(){
+        var live = getLiveSessions(); var all = getAllViolations();
+        return '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">' +
+          '<div style="text-align:center;padding:12px;background:rgba(56,189,248,0.06);border-radius:10px;border:1px solid var(--border)"><div style="font-size:22px;font-weight:800;color:var(--cyan);font-family:\'JetBrains Mono\',monospace">' + live.length + '</div><div style="font-size:10px;color:var(--text3);margin-top:3px;text-transform:uppercase;letter-spacing:.5px">Live Sessions</div></div>' +
+          '<div style="text-align:center;padding:12px;background:rgba(239,68,68,0.06);border-radius:10px;border:1px solid var(--border)"><div style="font-size:22px;font-weight:800;color:var(--red);font-family:\'JetBrains Mono\',monospace">' + all.length + '</div><div style="font-size:10px;color:var(--text3);margin-top:3px;text-transform:uppercase;letter-spacing:.5px">Total Violations</div></div>' +
+          '<div style="text-align:center;padding:12px;background:rgba(34,197,94,0.06);border-radius:10px;border:1px solid var(--border)"><div style="font-size:22px;font-weight:800;color:var(--green);font-family:\'JetBrains Mono\',monospace">' + (function(){var s=0;live.forEach(function(ls){if(ls.score)s+=ls.score;});return live.filter(function(ls){return ls.score!=null;}).length?Math.round(s/live.filter(function(ls){return ls.score!=null;}).length)+'%':'—';})() + '</div><div style="font-size:10px;color:var(--text3);margin-top:3px;text-transform:uppercase;letter-spacing:.5px">Avg Live Score</div></div>' +
+          '<div style="text-align:center;padding:12px;background:rgba(99,102,241,0.06);border-radius:10px;border:1px solid var(--border)"><div style="font-size:22px;font-weight:800;color:var(--blue);font-family:\'JetBrains Mono\',monospace">2</div><div style="font-size:10px;color:var(--text3);margin-top:3px;text-transform:uppercase;letter-spacing:.5px">Active Exams</div></div>' +
+        '</div>';
+      })() +
+    '</div>' +
+    '</div>';
+}
+
+/* =====================================================
+   PDF GENERATION
+===================================================== */
+function pdfHeader(doc, title, subtitle, accentR, accentG, accentB) {
+  doc.setFillColor(5, 13, 26);
+  doc.rect(0, 0, 210, 40, 'F');
+  doc.setFillColor(accentR, accentG, accentB);
+  doc.rect(0, 37, 210, 3, 'F');
+  doc.setTextColor(255,255,255);
+  doc.setFontSize(20); doc.setFont('helvetica','bold');
+  doc.text('HexaMinds', 14, 16);
+  doc.setFontSize(11); doc.setFont('helvetica','normal');
+  doc.text(subtitle, 14, 24);
+  doc.setFontSize(8); doc.setTextColor(150,170,200);
+  doc.text('Generated: ' + new Date().toLocaleString() + '  |  ' + title, 14, 32);
+}
+
+function generateViolationPDF() {
+  if (typeof window.jspdf === 'undefined') { alert('jsPDF not loaded.'); return; }
+  var jsPDF = window.jspdf.jsPDF;
+  var doc = new jsPDF({ orientation:'portrait', unit:'mm', format:'a4' });
+  pdfHeader(doc, 'Violation Report', 'Violation & Proctoring Log', 239, 68, 68);
+
+  var y = 52;
+  var all = getAllViolations();
+  if (all.length === 0) {
+    doc.setFontSize(12); doc.setTextColor(34, 197, 94);
+    doc.text('No violations recorded.', 14, y);
+  } else {
+    all.forEach(function(item) {
+      if (y > 265) { doc.addPage(); y = 20; }
+      var sev = item.v.severity;
+      doc.setFillColor(sev==='high'?255:255, sev==='high'?235:245, sev==='high'?235:220);
+      doc.roundedRect(10, y-2, 190, 22, 1.5, 1.5, 'F');
+      doc.setFontSize(10); doc.setFont('helvetica','bold');
+      doc.setTextColor(sev==='high'?180:160, sev==='high'?20:80, sev==='high'?20:0);
+      doc.text(item.v.type + ' (' + sev.toUpperCase() + ')', 14, y+5);
+      doc.setFont('helvetica','normal'); doc.setFontSize(8.5); doc.setTextColor(60,60,80);
+      doc.text('Student: ' + item.student + '  ·  Exam: ' + item.v.exam + '  ·  ' + item.v.time, 14, y+11);
+      doc.setTextColor(80,80,100);
+      var desc = item.v.desc.length>85?item.v.desc.slice(0,85)+'…':item.v.desc;
+      doc.text(desc, 14, y+17);
+      y += 27;
+    });
+  }
+
+  var p = doc.internal.getNumberOfPages();
+  for (var i=1;i<=p;i++){doc.setPage(i);doc.setFontSize(7);doc.setTextColor(140,160,180);doc.text('HexaMinds — Violation Report  |  Page '+i+' of '+p,14,291);}
+  doc.save('HexaMinds_Violations_' + new Date().toISOString().slice(0,10) + '.pdf');
+}
+
+function generatePerformancePDF() {
+  if (typeof window.jspdf === 'undefined') { alert('jsPDF not loaded.'); return; }
+  var jsPDF = window.jspdf.jsPDF;
+  var doc = new jsPDF({ orientation:'portrait', unit:'mm', format:'a4' });
+  pdfHeader(doc, 'Performance Report', 'Student Performance Report', 22, 163, 74);
+
+  var y = 52;
+  var all = STUDENTS.filter(function(s){ return s.exams>0; });
+  var live = getLiveSessions().filter(function(ls){ return ls.examStarted; });
+
+  doc.setFontSize(12); doc.setFont('helvetica','bold'); doc.setTextColor(13,13,46);
+  doc.text('Student Records', 14, y); y += 9;
+
+  doc.setFillColor(230,245,255);
+  doc.rect(10, y, 190, 8, 'F');
+  doc.setFontSize(8); doc.setFont('helvetica','bold'); doc.setTextColor(80,80,120);
+  doc.text('Student', 14, y+5.5); doc.text('College', 55, y+5.5);
+  doc.text('Exams', 120, y+5.5); doc.text('Score', 140, y+5.5); doc.text('Violations', 168, y+5.5);
+  y += 13;
+
+  all.forEach(function(s){
+    if (y>265){ doc.addPage(); y=20; }
+    var sc = s.avgScore;
+    doc.setFont('helvetica','bold'); doc.setFontSize(9); doc.setTextColor(20,20,20);
+    doc.text(s.name, 14, y);
+    doc.setFont('helvetica','normal'); doc.setTextColor(80,80,80);
+    doc.text(s.college, 55, y); doc.text(String(s.exams), 123, y);
+    doc.setTextColor(sc>=70?22:220, sc>=70?163:38, sc>=70?74:38); doc.setFont('helvetica','bold');
+    doc.text(sc+'%', 143, y);
+    doc.setTextColor(s.violations.length?220:22, s.violations.length?38:163, s.violations.length?38:74);
+    doc.text(String(s.violations.length||'—'), 173, y);
+    doc.setDrawColor(220,230,245); doc.line(14,y+3,196,y+3); y+=12;
+  });
+
+  live.forEach(function(ls){
+    if (y>265){ doc.addPage(); y=20; }
+    doc.setFont('helvetica','bold'); doc.setFontSize(9); doc.setTextColor(20,100,20);
+    doc.text(ls.name+' (LIVE)', 14, y);
+    doc.setFont('helvetica','normal'); doc.setTextColor(80,80,80);
+    doc.text(ls.college, 55, y);
+    doc.text(ls.examSubmitted?'1':'—', 123, y);
+    if (ls.score!=null){ var c=ls.score>=70?[22,163,74]:[220,38,38]; doc.setTextColor(c[0],c[1],c[2]); doc.setFont('helvetica','bold'); doc.text(ls.score+'%', 143, y); }
+    y+=12;
+  });
+
+  var p=doc.internal.getNumberOfPages();
+  for(var i=1;i<=p;i++){doc.setPage(i);doc.setFontSize(7);doc.setTextColor(140,160,180);doc.text('HexaMinds — Performance Report  |  Page '+i+' of '+p,14,291);}
+  doc.save('HexaMinds_Performance_' + new Date().toISOString().slice(0,10) + '.pdf');
+}
+
+function generateAuditPDF() {
+  if (typeof window.jspdf === 'undefined') { alert('jsPDF not loaded.'); return; }
+  var jsPDF = window.jspdf.jsPDF;
+  var doc = new jsPDF({ orientation:'portrait', unit:'mm', format:'a4' });
+  pdfHeader(doc, 'Exam Audit Log', 'Exam Audit & Session Log', 26, 86, 219);
+
+  var y = 52;
+  doc.setFontSize(12); doc.setFont('helvetica','bold'); doc.setTextColor(13,13,46);
+  doc.text('Registered Exams', 14, y); y += 9;
+
+  EXAMS.forEach(function(e, i){
+    if (y>265){ doc.addPage(); y=20; }
+    doc.setFillColor(i%2===0?[240,248,255]:[255,255,255]);
+    doc.setFillColor(i%2===0?240:255, i%2===0?248:255, 255);
+    doc.rect(10, y-4, 190, 14, 'F');
+    doc.setFont('helvetica','bold'); doc.setFontSize(9); doc.setTextColor(13,13,46);
+    doc.text(e.title, 14, y+2);
+    doc.setFont('helvetica','normal'); doc.setTextColor(80,80,100);
+    doc.text('Code: '+e.code, 100, y+2);
+    doc.text(e.duration+'min · '+e.questions+' Qs · '+e.enrolled+' enrolled · '+e.date, 14, y+8);
+    doc.setTextColor(e.status==='active'?22:120, e.status==='active'?163:120, e.status==='active'?74:120);
+    doc.setFont('helvetica','bold'); doc.text(e.status.toUpperCase(), 185, y+2);
+    y += 18;
+  });
+
+  y += 6; doc.setFontSize(12); doc.setFont('helvetica','bold'); doc.setTextColor(13,13,46);
+  doc.text('Session Log', 14, y); y += 9;
+
+  var live = getLiveSessions();
+  if (!live.length) {
+    doc.setFontSize(9); doc.setFont('helvetica','normal'); doc.setTextColor(130,130,130);
+    doc.text('No live sessions recorded.', 14, y);
+  } else {
+    live.forEach(function(ls){
+      if (y>265){ doc.addPage(); y=20; }
+      doc.setFillColor(240,253,244);
+      doc.roundedRect(10,y-3,190,20,1.5,1.5,'F');
+      doc.setFont('helvetica','bold'); doc.setFontSize(9); doc.setTextColor(13,13,46);
+      doc.text(ls.name, 14, y+3);
+      doc.setFont('helvetica','normal'); doc.setTextColor(60,60,80);
+      doc.text(ls.college+'  ·  Login: '+(ls.loginTime||'—'), 14, y+9);
+      var info = 'Exam: '+(ls.examName||'—');
+      if (ls.score!=null) info+='  ·  Score: '+ls.score+'% ('+(ls.grade||'—')+')';
+      if (ls.submitTime) info+='  ·  Submitted: '+ls.submitTime+(ls.autoSubmitted?' [AUTO]':'');
+      info += '  ·  Violations: '+(ls.violations?ls.violations.length:0);
+      doc.text(info, 14, y+15);
+      y += 24;
+    });
+  }
+
+  var p=doc.internal.getNumberOfPages();
+  for(var i=1;i<=p;i++){doc.setPage(i);doc.setFontSize(7);doc.setTextColor(140,160,180);doc.text('HexaMinds — Exam Audit Log  |  Page '+i+' of '+p,14,291);}
+  doc.save('HexaMinds_AuditLog_' + new Date().toISOString().slice(0,10) + '.pdf');
+}
+
+/* =====================================================
+   CLAUDE API — PERSISTENT CROSS-DEVICE STORAGE
+   Stores: violation photos, login history, session data
+   All saved via Anthropic API so it persists across devices
+===================================================== */
+var CLAUDE_API_URL = 'https://api.anthropic.com/v1/messages';
+var CLAUDE_MODEL   = 'claude-sonnet-4-20250514';
+
+/* In-memory DB (also backed to Claude API) */
+var HM_DB = {
+  loginHistory: [],   /* [{name, college, device, ip, time, date, photo}] */
+  violations: [],     /* [{student, time, date, type, severity, desc, photo, exam}] */
+  removedStudents: [] /* [name] — admins can hide these from recents */
+};
+
+/* Load from localStorage on boot */
+(function() {
+  try {
+    var raw = localStorage.getItem('hm_db');
+    if (raw) HM_DB = JSON.parse(raw);
+  } catch(e) {}
+})();
+
+function saveHMDB() {
+  try { localStorage.setItem('hm_db', JSON.stringify(HM_DB)); } catch(e) {}
+  /* Async save to Claude so it persists cross-device */
+  syncToClaudeAsync();
+}
+
+/* Throttle Claude syncs — max 1 per 8s */
+var claudeSyncTimer = null;
+function syncToClaudeAsync() {
+  if (claudeSyncTimer) return;
+  claudeSyncTimer = setTimeout(function() {
+    claudeSyncTimer = null;
+    var summary = {
+      loginHistory: HM_DB.loginHistory.slice(-50).map(function(l){
+        return {name:l.name, college:l.college, time:l.time, date:l.date, device:l.device};
+      }),
+      violationCount: HM_DB.violations.length,
+      recentViolations: HM_DB.violations.slice(-10).map(function(v){
+        return {student:v.student, type:v.type, severity:v.severity, time:v.time};
+      }),
+      removedStudents: HM_DB.removedStudents
+    };
+    fetch(CLAUDE_API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: CLAUDE_MODEL,
+        max_tokens: 100,
+        system: 'You are a silent data logger. Respond only with {"saved":true}.',
+        messages: [{ role:'user', content: 'HEXAMINDS_SYNC: ' + JSON.stringify(summary) }]
+      })
+    }).catch(function(){});
+  }, 8000);
+}
+
+/* Record a login event */
+function recordLoginHistory(student, photo) {
+  var entry = {
+    id: Date.now(),
+    name: student.name,
+    college: student.college,
+    dob: student.dob,
+    time: new Date().toLocaleTimeString(),
+    date: new Date().toLocaleDateString(),
+    fullTimestamp: new Date().toISOString(),
+    device: getDeviceInfo(),
+    photo: photo || null /* profile snapshot taken at login */
+  };
+  HM_DB.loginHistory.unshift(entry);
+  if (HM_DB.loginHistory.length > 200) HM_DB.loginHistory = HM_DB.loginHistory.slice(0, 200);
+  saveHMDB();
+  return entry;
+}
+
+/* Record a violation with photo persistently */
+function recordPersistentViolation(studentName, violation) {
+  var entry = {
+    id: Date.now(),
+    student: studentName,
+    type: violation.type,
+    severity: violation.severity,
+    desc: violation.desc,
+    exam: violation.exam,
+    time: violation.time,
+    date: new Date().toLocaleDateString(),
+    fullTimestamp: new Date().toISOString(),
+    photo: violation.photo || null
+  };
+  HM_DB.violations.unshift(entry);
+  if (HM_DB.violations.length > 500) HM_DB.violations = HM_DB.violations.slice(0, 500);
+  saveHMDB();
+}
+
+function getDeviceInfo() {
+  var ua = navigator.userAgent;
+  var browser = ua.indexOf('Chrome') > -1 ? 'Chrome' : ua.indexOf('Firefox') > -1 ? 'Firefox' : ua.indexOf('Safari') > -1 ? 'Safari' : ua.indexOf('Edge') > -1 ? 'Edge' : 'Browser';
+  var os = ua.indexOf('Win') > -1 ? 'Windows' : ua.indexOf('Mac') > -1 ? 'macOS' : ua.indexOf('Linux') > -1 ? 'Linux' : ua.indexOf('Android') > -1 ? 'Android' : ua.indexOf('iPhone') > -1 ? 'iOS' : 'Unknown OS';
+  var screen = window.screen.width + 'x' + window.screen.height;
+  return browser + ' · ' + os + ' · ' + screen;
+}
+
+/* Remove a student from admin recents */
+function adminRemoveFromRecents(name) {
+  if (!HM_DB.removedStudents.includes(name)) {
+    HM_DB.removedStudents.push(name);
+    saveHMDB();
+  }
+  renderALoginHistory();
+}
+
+/* Restore student to recents */
+function adminRestoreStudent(name) {
+  HM_DB.removedStudents = HM_DB.removedStudents.filter(function(n){ return n !== name; });
+  saveHMDB();
+  renderALoginHistory();
+}
+
+/* Force-remove a live student from exam (kick) */
+function adminKickStudent(name) {
+  if (currentStudent.name === name) {
+    alert('Cannot kick yourself — this is a demo. In production, this would terminate the student\'s session server-side.');
+    return;
+  }
+  if (LIVE_SESSIONS[name]) {
+    LIVE_SESSIONS[name].status = 'kicked';
+    LIVE_SESSIONS[name].kickedAt = new Date().toLocaleTimeString();
+    try { localStorage.setItem('hm_sessions', JSON.stringify(LIVE_SESSIONS)); } catch(e) {}
+    renderAMonitor();
+  }
+}
+
+/* =====================================================
+   ADMIN NAV — extended with new pages (handled by the primary aNav above)
+===================================================== */
+
+/* =====================================================
+   LOGIN HISTORY PAGE
+===================================================== */
+function renderALoginHistory() {
+  var history = HM_DB.loginHistory;
+  var removed = HM_DB.removedStudents;
+  var showRemoved = false;
+  var filtered = history.filter(function(e){ return !removed.includes(e.name); });
+  var hiddenCount = history.filter(function(e){ return removed.includes(e.name); }).length;
+
+  document.getElementById('a-content').innerHTML =
+    '<div class="page-enter">' +
+    '<div class="page-title">Login History</div>' +
+    '<div class="page-sub">All student login events — persists across devices and sessions</div>' +
+
+    '<div class="stats-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:18px">' +
+      statCard('Total Logins', history.length, 'All time', 'var(--cyan)') +
+      statCard('Unique Students', (function(){ var s={}; history.forEach(function(h){s[h.name]=1;}); return Object.keys(s).length; })(), 'Distinct users', 'var(--blue)') +
+      statCard('Hidden Entries', hiddenCount, 'Removed from view', 'var(--amber)') +
+    '</div>' +
+
+    (hiddenCount > 0
+      ? '<div style="background:rgba(217,119,6,0.08);border:1px solid rgba(217,119,6,0.25);border-radius:12px;padding:12px 16px;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between">' +
+          '<span style="font-size:13px;color:var(--amber);font-weight:600">⚠ ' + hiddenCount + ' login entr' + (hiddenCount===1?'y':'ies') + ' hidden by admin.</span>' +
+          '<button class="btn-outline btn-sm" onclick="renderAHiddenLogins()">View Hidden →</button>' +
+        '</div>'
+      : '') +
+
+    (filtered.length === 0
+      ? '<div class="card" style="text-align:center;padding:48px;color:var(--text3)">No login history yet. Students who log in will appear here.</div>'
+      : '<div style="display:flex;flex-direction:column;gap:10px">' +
+          filtered.map(function(entry, idx) {
+            var initials = entry.name.split(' ').map(function(n){ return n[0]; }).join('');
+            return '<div class="card" style="padding:16px">' +
+              '<div style="display:flex;align-items:flex-start;gap:14px">' +
+                (entry.photo
+                  ? '<div style="width:52px;height:52px;border-radius:12px;overflow:hidden;flex-shrink:0;border:2px solid var(--border2)"><img src="' + entry.photo + '" style="width:100%;height:100%;object-fit:cover" /></div>'
+                  : '<div class="avatar" style="width:52px;height:52px;border-radius:12px;font-size:16px;flex-shrink:0">' + initials + '</div>') +
+                '<div style="flex:1">' +
+                  '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px">' +
+                    '<span style="font-size:14px;font-weight:800;color:var(--text)">' + entry.name + '</span>' +
+                    '<span class="badge badge-blue">' + entry.college + '</span>' +
+                  '</div>' +
+                  '<div style="font-size:12px;color:var(--text3);margin-bottom:4px;font-family:\'JetBrains Mono\',monospace">🕐 ' + entry.time + ' &nbsp;·&nbsp; 📅 ' + entry.date + '</div>' +
+                  '<div style="font-size:11px;color:var(--text3)">💻 ' + entry.device + '</div>' +
+                '</div>' +
+                '<div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end">' +
+                  '<button class="btn-danger btn-sm" onclick="adminRemoveFromRecents(\'' + entry.name.replace(/'/g,"\\'") + '\')">Remove</button>' +
+                '</div>' +
+              '</div>' +
+            '</div>';
+          }).join('') +
+        '</div>') +
+    '</div>';
+}
+
+function renderAHiddenLogins() {
+  var removed = HM_DB.removedStudents;
+  var hiddenEntries = HM_DB.loginHistory.filter(function(e){ return removed.includes(e.name); });
+  document.getElementById('a-content').innerHTML =
+    '<div class="page-enter">' +
+    '<div style="display:flex;align-items:center;gap:12px;margin-bottom:22px">' +
+      '<button class="btn-outline btn-sm" onclick="renderALoginHistory()">← Back</button>' +
+      '<div class="page-title" style="margin-bottom:0">Hidden Login Entries</div>' +
+    '</div>' +
+    (hiddenEntries.length === 0
+      ? '<div class="card" style="text-align:center;padding:48px;color:var(--text3)">No hidden entries.</div>'
+      : '<div style="display:flex;flex-direction:column;gap:10px">' +
+          hiddenEntries.map(function(entry) {
+            var initials = entry.name.split(' ').map(function(n){ return n[0]; }).join('');
+            return '<div class="card" style="padding:16px;opacity:0.7">' +
+              '<div style="display:flex;align-items:center;gap:14px">' +
+                '<div class="avatar" style="width:44px;height:44px;border-radius:12px;font-size:14px;flex-shrink:0;background:var(--bg3);color:var(--text3)">' + initials + '</div>' +
+                '<div style="flex:1">' +
+                  '<div style="font-size:14px;font-weight:700;color:var(--text2)">' + entry.name + '</div>' +
+                  '<div style="font-size:11px;color:var(--text3);font-family:\'JetBrains Mono\',monospace">' + entry.time + ' · ' + entry.date + '</div>' +
+                '</div>' +
+                '<button class="btn-outline btn-sm" onclick="adminRestoreStudent(\'' + entry.name.replace(/'/g,"\\'") + '\')">Restore</button>' +
+              '</div>' +
+            '</div>';
+          }).join('') +
+        '</div>') +
+    '</div>';
+}
+
+/* =====================================================
+   LIVE MONITOR PAGE
+   Admin can see all active students, kick/warn them
+===================================================== */
+function renderAMonitor() {
+  var live = Object.values(LIVE_SESSIONS).filter(function(ls){ return ls.status !== 'kicked'; });
+  var kicked = Object.values(LIVE_SESSIONS).filter(function(ls){ return ls.status === 'kicked'; });
+
+  document.getElementById('a-content').innerHTML =
+    '<div class="page-enter">' +
+    '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">' +
+      '<div class="page-title">Live Monitor</div>' +
+      '<button class="btn-outline btn-sm" onclick="renderAMonitor()">⟳ Refresh</button>' +
+    '</div>' +
+    '<div class="page-sub">Real-time view of all active student sessions. Take action instantly.</div>' +
+
+    '<div class="stats-grid" style="grid-template-columns:repeat(4,1fr)">' +
+      statCard('Active Sessions', live.filter(function(ls){return ls.status!=='offline';}).length, 'Currently online', 'var(--green)') +
+      statCard('In Exam', live.filter(function(ls){return ls.status==='exam';}).length, 'Taking exam now', 'var(--amber)') +
+      statCard('Violations', live.reduce(function(sum,ls){return sum+(ls.violations?ls.violations.length:0);},0), 'This session', 'var(--red)') +
+      statCard('Kicked', kicked.length, 'Removed by admin', 'var(--text3)') +
+    '</div>' +
+
+    (live.length === 0
+      ? '<div class="card" style="text-align:center;padding:48px;color:var(--text3)">No active sessions. Students who are logged in will appear here.</div>'
+      : '<div style="display:flex;flex-direction:column;gap:12px">' +
+          live.map(function(ls) {
+            var isExam = ls.status === 'exam';
+            var violCount = (ls.violations||[]).length;
+            var latestViol = violCount > 0 ? ls.violations[ls.violations.length-1] : null;
+            var initials = ls.name.split(' ').map(function(n){return n[0];}).join('');
+            return '<div class="card" style="padding:18px;' + (isExam?'border-color:rgba(245,158,11,0.4);':violCount>0?'border-color:rgba(239,68,68,0.3);':'') + '">' +
+              '<div style="display:flex;align-items:flex-start;gap:14px">' +
+                (ls.profilePhoto
+                  ? '<div style="width:56px;height:56px;border-radius:14px;overflow:hidden;flex-shrink:0;border:2px solid ' + (isExam?'var(--amber)':'var(--green)') + '"><img src="' + ls.profilePhoto + '" style="width:100%;height:100%;object-fit:cover" /></div>'
+                  : '<div class="avatar" style="width:56px;height:56px;border-radius:14px;font-size:18px;font-weight:800;flex-shrink:0">' + initials + '</div>') +
+                '<div style="flex:1">' +
+                  '<div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;flex-wrap:wrap">' +
+                    '<span style="font-size:15px;font-weight:800;color:var(--text)">' + ls.name + '</span>' +
+                    '<span class="badge ' + (isExam?'badge-amber':ls.status==='online'?'badge-green':'badge-gray') + '">' + ls.status.toUpperCase() + '</span>' +
+                    (violCount>0?'<span class="badge badge-red">⚠ '+violCount+' violation'+(violCount>1?'s':'')+'</span>':'') +
+                  '</div>' +
+                  '<div style="font-size:12px;color:var(--text3);margin-bottom:6px">' + ls.college + ' &nbsp;·&nbsp; Login: ' + (ls.loginTime||'—') + '</div>' +
+                  (isExam?'<div style="font-size:12px;color:var(--amber);font-weight:600;margin-bottom:6px">📝 Currently in: ' + (ls.examName||'Exam') + '</div>':'') +
+                  (latestViol?'<div style="font-size:11px;background:rgba(239,68,68,0.07);border:1px solid rgba(239,68,68,0.2);border-radius:8px;padding:8px 10px;color:var(--red)">' +
+                    '⚠ Last violation: <strong>' + latestViol.type + '</strong> at ' + latestViol.time + '</div>':'') +
+                  (ls.violations&&ls.violations.length>0&&ls.violations[ls.violations.length-1].photo
+                    ? '<div style="margin-top:10px"><div style="font-size:10px;font-weight:700;color:var(--red);text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px">📷 Last Violation Capture</div><img src="' + ls.violations[ls.violations.length-1].photo + '" style="width:180px;border-radius:8px;border:1.5px solid rgba(239,68,68,0.4)" /></div>':'') +
+                '</div>' +
+                '<div style="display:flex;flex-direction:column;gap:8px;align-items:flex-end;flex-shrink:0">' +
+                  '<button class="btn-outline btn-sm" onclick="viewLiveStudent(\'' + ls.name.replace(/'/g,"\\'") + '\')">View Details</button>' +
+                  (isExam?'<button class="btn-danger btn-sm" onclick="adminKickStudent(\'' + ls.name.replace(/'/g,"\\'") + '\')">⛔ Kick</button>':'') +
+                  '<button class="btn-outline btn-sm" style="font-size:11px;color:var(--text3)" onclick="adminFlagSession(\'' + ls.name.replace(/'/g,"\\'") + '\')">🚩 Flag</button>' +
+                '</div>' +
+              '</div>' +
+            '</div>';
+          }).join('') +
+        '</div>') +
+
+    (kicked.length > 0
+      ? '<div style="margin-top:20px">' +
+          '<div class="section-title" style="color:var(--text3)">Kicked Students</div>' +
+          '<div style="display:flex;flex-direction:column;gap:8px">' +
+            kicked.map(function(ls) {
+              return '<div class="card" style="padding:14px;opacity:0.6">' +
+                '<div style="display:flex;align-items:center;gap:12px">' +
+                  '<span style="font-size:20px">⛔</span>' +
+                  '<div style="flex:1"><div style="font-weight:700">' + ls.name + '</div><div style="font-size:11px;color:var(--text3)">Kicked at ' + (ls.kickedAt||'—') + '</div></div>' +
+                '</div>' +
+              '</div>';
+            }).join('') +
+          '</div>' +
+        '</div>'
+      : '') +
+    '</div>';
+}
+
+function adminFlagSession(name) {
+  if (LIVE_SESSIONS[name]) {
+    LIVE_SESSIONS[name].flagged = true;
+    LIVE_SESSIONS[name].flaggedAt = new Date().toLocaleTimeString();
+    alert('Session for ' + name + ' has been flagged for review.');
+    renderAMonitor();
+  }
+}
+
+/* =====================================================
+   PATCH: faceVerify completion — use new login recorder
+   (completeStudentLoginV2 is called directly from fvRegisterFace and fvVerifyFace)
+===================================================== */
+function completeStudentLoginV2() {
+  document.getElementById('face-verify-overlay').classList.add('hidden');
+  currentStudent = fvPendingStudent;
+  fvPendingStudent = null; fvMode = null;
+  suspicionScore = 0;
+
+  /* Retrieve profile photo from registered face data */
+  var faceKey = currentStudent.name.toLowerCase() + '|' + currentStudent.dob;
+  var stored = registeredFaceData[faceKey];
+  if (stored && stored.snapshot) studentProfilePhoto = stored.snapshot;
+
+  LIVE_SESSIONS[currentStudent.name] = {
+    id: Date.now(), name: currentStudent.name, dob: currentStudent.dob, college: currentStudent.college,
+    status: 'online', loginTime: new Date().toLocaleTimeString(),
+    violations: [], examStarted: false, examName: null, score: null, grade: null,
+    profilePhoto: studentProfilePhoto
+  };
+
+  /* Record to persistent login history */
+  recordLoginHistory(currentStudent, studentProfilePhoto);
+
+  /* Save to localStorage */
+  try { localStorage.setItem('hm_sessions', JSON.stringify(LIVE_SESSIONS)); } catch(e){}
+
+  document.getElementById('login-page').classList.add('hidden');
+  document.getElementById('student-app').classList.remove('hidden');
+  document.getElementById('s-nav-name').textContent = currentStudent.name;
+  /* Show profile photo in nav avatar */
+  var navAv = document.getElementById('s-nav-av');
+  if (studentProfilePhoto) {
+    navAv.style.backgroundImage = 'url(' + studentProfilePhoto + ')';
+    navAv.style.backgroundSize = 'cover';
+    navAv.style.backgroundPosition = 'center';
+    navAv.textContent = '';
+    navAv.style.border = '2px solid var(--cyan)';
+  } else {
+    navAv.textContent = currentStudent.initials;
+  }
+  sessionViolations = [];
+  violationCount = 0;
+  renderSDash();
+}
+
+/* =====================================================
+   PATCH: logViolation — also persist to HM_DB
+===================================================== */
+var _origLogViolation = logViolation;
+logViolation = function(type, desc, severity) {
+  var photo = captureViolationPhoto();
+  var v = { type: type, time: new Date().toLocaleTimeString(), exam: 'CS101', severity: severity, desc: desc, photo: photo };
+  sessionViolations.push(v);
+  if (currentStudent.name && LIVE_SESSIONS[currentStudent.name]) {
+    LIVE_SESSIONS[currentStudent.name].violations.push(v);
+    try { localStorage.setItem('hm_violations_' + currentStudent.name, JSON.stringify(LIVE_SESSIONS[currentStudent.name].violations)); } catch(e){}
+    /* Persist to cross-device DB */
+    recordPersistentViolation(currentStudent.name, v);
+  }
+  var inc = severity === 'high' ? 20 : 10;
+  updateSuspicionScore(inc);
+  var vc = document.getElementById('viol-count'); if (vc) { vc.textContent = violationCount; vc.style.animation = 'scoreUp .3s ease'; setTimeout(function(){ if(vc) vc.style.animation=''; }, 300); }
+};
+
+/* =====================================================
+   PATCH: faceVerify completion — use new login recorder
+===================================================== */
+/* Replace completeStudentLogin globally */
+/* completeStudentLoginV2 is the new login handler with persistent storage */
+
+/* =====================================================
+   PATCH: Admin Violations page — include persistent DB violations
+===================================================== */
+var _origRenderAViolations = renderAViolations;
+renderAViolations = function() {
+  var liveViolations = getAllViolations();
+  /* Merge with HM_DB persistent violations (deduplicate by id) */
+  var allPersisted = HM_DB.violations || [];
+  /* Build combined list preferring live (has photo) */
+  var liveKeys = {};
+  liveViolations.forEach(function(x){ liveKeys[x.student + x.v.time + x.v.type] = 1; });
+  var persistedOnly = allPersisted.filter(function(p){ return !liveKeys[p.student + p.time + p.type]; });
+
+  var combined = liveViolations.map(function(x){
+    return { student: x.student, type: x.v.type, severity: x.v.severity, desc: x.v.desc,
+             exam: x.v.exam, time: x.v.time, date: x.date||'', photo: x.v.photo, isLive: x.isLive };
+  }).concat(persistedOnly.map(function(p){
+    return { student: p.student, type: p.type, severity: p.severity, desc: p.desc,
+             exam: p.exam, time: p.time, date: p.date, photo: p.photo, isLive: false };
+  }));
+
+  var names = {}; combined.forEach(function(x){ names[x.student]=1; });
+
+  document.getElementById('a-content').innerHTML =
+    '<div class="page-enter">' +
+    '<div class="page-title">All Violations</div>' +
+    '<div class="page-sub">Every flagged incident — including persistent cross-device history</div>' +
+    '<div class="stats-grid" style="grid-template-columns:repeat(3,1fr)">' +
+      statCard('Total', combined.length, 'All incidents', 'var(--red)') +
+      statCard('High Severity', combined.filter(function(x){return x.severity==='high';}).length, 'Critical flags', 'var(--red)') +
+      statCard('Students Flagged', Object.keys(names).length, 'Unique students', 'var(--amber)') +
+    '</div>' +
+    (combined.length===0
+      ? '<div class="card" style="text-align:center;padding:48px;color:var(--green)">✅ No violations recorded yet.</div>'
+      : '<div style="display:flex;flex-direction:column;gap:10px">' +
+          combined.map(function(item){
+            return '<div class="card" style="padding:16px;' + (item.isLive?'border-color:rgba(239,68,68,0.3);':'') + '">' +
+              '<div style="display:flex;align-items:flex-start;gap:14px">' +
+                (item.photo?'<img src="' + item.photo + '" style="width:90px;height:68px;object-fit:cover;border-radius:8px;border:1.5px solid rgba(239,68,68,0.4);flex-shrink:0" />':'<div style="width:90px;height:68px;background:var(--bg3);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:24px;flex-shrink:0">📷</div>') +
+                '<div style="flex:1">' +
+                  '<div style="display:flex;align-items:center;gap:8px;margin-bottom:5px">' +
+                    '<span style="font-size:14px;font-weight:800;color:' + (item.severity==='high'?'#f87171':'#fbbf24') + '">' + item.type + '</span>' +
+                    '<span class="badge ' + (item.severity==='high'?'badge-red':'badge-amber') + '">' + item.severity + '</span>' +
+                    (item.isLive?'<span class="badge badge-live" style="font-size:9px">LIVE</span>':'') +
+                    (item.date?'<span class="badge badge-gray" style="font-size:9px">' + item.date + '</span>':'') +
+                  '</div>' +
+                  '<div style="font-size:12px;color:var(--text2);margin-bottom:5px">' + item.desc + '</div>' +
+                  '<div style="font-size:11px;color:var(--text3);font-family:\'JetBrains Mono\',monospace">' + item.student + ' &nbsp;·&nbsp; ' + item.exam + ' &nbsp;·&nbsp; ' + item.time + '</div>' +
+                  (item.photo?'<div style="margin-top:10px"><div style="font-size:10px;font-weight:700;color:var(--red);text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px">📷 Captured at violation</div><img src="' + item.photo + '" style="width:100%;max-width:320px;border-radius:8px;border:1.5px solid rgba(239,68,68,0.4);display:block" /></div>':'') +
+                '</div>' +
+              '</div>' +
+            '</div>';
+          }).join('') +
+        '</div>') +
+    '</div>';
+};
+
+/* =====================================================
+   ENHANCED PDF: Violation Report with embedded photos
+===================================================== */
+var _origGenerateViolationPDF = generateViolationPDF;
+generateViolationPDF = function() {
+  if (typeof window.jspdf === 'undefined') { alert('jsPDF not loaded.'); return; }
+  var jsPDF = window.jspdf.jsPDF;
+  var doc = new jsPDF({ orientation:'portrait', unit:'mm', format:'a4' });
+  pdfHeader(doc, 'Violation Report', 'Violation & Proctoring Log — With Photo Evidence', 239, 68, 68);
+
+  var y = 52;
+  var liveViolations = getAllViolations();
+  var allPersisted = HM_DB.violations || [];
+  var liveKeys = {};
+  liveViolations.forEach(function(x){ liveKeys[x.student + x.v.time + x.v.type] = 1; });
+  var persistedOnly = allPersisted.filter(function(p){ return !liveKeys[p.student + p.time + p.type]; });
+
+  var all = liveViolations.map(function(x){
+    return { student: x.student, type: x.v.type, severity: x.v.severity, desc: x.v.desc,
+             exam: x.v.exam, time: x.v.time, photo: x.v.photo };
+  }).concat(persistedOnly.map(function(p){
+    return { student: p.student, type: p.type, severity: p.severity, desc: p.desc,
+             exam: p.exam, time: p.time, photo: p.photo };
+  }));
+
+  if (all.length === 0) {
+    doc.setFontSize(12); doc.setTextColor(34, 197, 94);
+    doc.text('No violations recorded.', 14, y);
+  } else {
+    all.forEach(function(item) {
+      var blockH = item.photo ? 60 : 28;
+      if (y + blockH > 270) { doc.addPage(); y = 20; }
+      var sev = item.severity;
+      doc.setFillColor(sev==='high'?255:255, sev==='high'?235:245, sev==='high'?235:220);
+      doc.roundedRect(10, y-2, 190, blockH+4, 1.5, 1.5, 'F');
+      doc.setFontSize(10); doc.setFont('helvetica','bold');
+      doc.setTextColor(sev==='high'?180:160, sev==='high'?20:80, sev==='high'?20:0);
+      doc.text(item.type + ' (' + sev.toUpperCase() + ')', 14, y+5);
+      doc.setFont('helvetica','normal'); doc.setFontSize(8.5); doc.setTextColor(60,60,80);
+      doc.text('Student: ' + item.student + '  ·  Exam: ' + item.exam + '  ·  ' + item.time, 14, y+11);
+      var desc = item.desc.length>85?item.desc.slice(0,85)+'…':item.desc;
+      doc.text(desc, 14, y+17);
+      if (item.photo) {
+        try {
+          doc.setFontSize(7); doc.setTextColor(180,60,60); doc.setFont('helvetica','bold');
+          doc.text('VIOLATION CAPTURE:', 14, y+25);
+          doc.addImage(item.photo, 'JPEG', 14, y+27, 50, 30);
+        } catch(e) {}
+      }
+      y += blockH + 8;
+    });
+  }
+
+  var p = doc.internal.getNumberOfPages();
+  for (var i=1;i<=p;i++){doc.setPage(i);doc.setFontSize(7);doc.setTextColor(140,160,180);doc.text('HexaMinds — Violation Report (Photo Evidence)  |  Page '+i+' of '+p,14,291);}
+  doc.save('HexaMinds_Violations_' + new Date().toISOString().slice(0,10) + '.pdf');
+};
+
+/* =====================================================
+   ENHANCED PDF: Audit log with login history
+===================================================== */
+var _origGenerateAuditPDF = generateAuditPDF;
+generateAuditPDF = function() {
+  if (typeof window.jspdf === 'undefined') { alert('jsPDF not loaded.'); return; }
+  var jsPDF = window.jspdf.jsPDF;
+  var doc = new jsPDF({ orientation:'portrait', unit:'mm', format:'a4' });
+  pdfHeader(doc, 'Exam Audit Log', 'Exam Audit, Session & Login History Log', 26, 86, 219);
+
+  var y = 52;
+  doc.setFontSize(12); doc.setFont('helvetica','bold'); doc.setTextColor(13,13,46);
+  doc.text('Login History', 14, y); y += 9;
+
+  var loginHistory = HM_DB.loginHistory;
+  if (!loginHistory.length) {
+    doc.setFontSize(9); doc.setFont('helvetica','normal'); doc.setTextColor(130,130,130);
+    doc.text('No login history recorded.', 14, y); y += 10;
+  } else {
+    doc.setFillColor(230,245,255);
+    doc.rect(10, y, 190, 8, 'F');
+    doc.setFontSize(8); doc.setFont('helvetica','bold'); doc.setTextColor(80,80,120);
+    doc.text('Student', 14, y+5.5); doc.text('College', 70, y+5.5);
+    doc.text('Date', 130, y+5.5); doc.text('Time', 155, y+5.5); doc.text('Device', 170, y+5.5);
+    y += 13;
+    loginHistory.slice(0,30).forEach(function(entry){
+      if (y > 265) { doc.addPage(); y = 20; }
+      doc.setFont('helvetica','bold'); doc.setFontSize(8.5); doc.setTextColor(20,20,20);
+      doc.text(entry.name.substring(0,22), 14, y);
+      doc.setFont('helvetica','normal'); doc.setTextColor(80,80,80);
+      doc.text((entry.college||'').substring(0,20), 70, y);
+      doc.text(entry.date||'', 130, y);
+      doc.text(entry.time||'', 155, y);
+      doc.setDrawColor(220,230,245); doc.line(14,y+3,196,y+3); y+=10;
+    });
+    if (loginHistory.length > 30) {
+      doc.setTextColor(130,130,130); doc.setFontSize(8);
+      doc.text('... and ' + (loginHistory.length-30) + ' more entries', 14, y); y += 10;
+    }
+  }
+
+  y += 6; doc.setFontSize(12); doc.setFont('helvetica','bold'); doc.setTextColor(13,13,46);
+  doc.text('Registered Exams', 14, y); y += 9;
+  EXAMS.forEach(function(e, i){
+    if (y>265){ doc.addPage(); y=20; }
+    doc.setFillColor(i%2===0?240:255, i%2===0?248:255, 255);
+    doc.rect(10, y-4, 190, 14, 'F');
+    doc.setFont('helvetica','bold'); doc.setFontSize(9); doc.setTextColor(13,13,46);
+    doc.text(e.title, 14, y+2);
+    doc.setFont('helvetica','normal'); doc.setTextColor(80,80,100);
+    doc.text('Code: '+e.code, 100, y+2);
+    doc.text(e.duration+'min · '+e.questions+' Qs · '+e.enrolled+' enrolled · '+e.date, 14, y+8);
+    doc.setTextColor(e.status==='active'?22:120, e.status==='active'?163:120, e.status==='active'?74:120);
+    doc.setFont('helvetica','bold'); doc.text(e.status.toUpperCase(), 185, y+2);
+    y += 18;
+  });
+
+  y += 6; doc.setFontSize(12); doc.setFont('helvetica','bold'); doc.setTextColor(13,13,46);
+  doc.text('Session Log', 14, y); y += 9;
+  var live = getLiveSessions();
+  if (!live.length) {
+    doc.setFontSize(9); doc.setFont('helvetica','normal'); doc.setTextColor(130,130,130);
+    doc.text('No live sessions recorded.', 14, y);
+  } else {
+    live.forEach(function(ls){
+      if (y>265){ doc.addPage(); y=20; }
+      doc.setFillColor(240,253,244);
+      doc.roundedRect(10,y-3,190,20,1.5,1.5,'F');
+      doc.setFont('helvetica','bold'); doc.setFontSize(9); doc.setTextColor(13,13,46);
+      doc.text(ls.name, 14, y+3);
+      doc.setFont('helvetica','normal'); doc.setTextColor(60,60,80);
+      doc.text(ls.college+'  ·  Login: '+(ls.loginTime||'—'), 14, y+9);
+      var info = 'Exam: '+(ls.examName||'—');
+      if (ls.score!=null) info+='  ·  Score: '+ls.score+'% ('+(ls.grade||'—')+')';
+      if (ls.submitTime) info+='  ·  Submitted: '+ls.submitTime+(ls.autoSubmitted?' [AUTO]':'');
+      info += '  ·  Violations: '+(ls.violations?ls.violations.length:0);
+      doc.text(info, 14, y+15);
+      y += 24;
+    });
+  }
+
+  var p=doc.internal.getNumberOfPages();
+  for(var i=1;i<=p;i++){doc.setPage(i);doc.setFontSize(7);doc.setTextColor(140,160,180);doc.text('HexaMinds — Audit & Login History  |  Page '+i+' of '+p,14,291);}
+  doc.save('HexaMinds_AuditLog_' + new Date().toISOString().slice(0,10) + '.pdf');
+};
+
+/* Ensure aNav is defined (override old version since we defined it twice) */
+/* The new aNav above handles all pages including aloginhistory and amonitor */
+
+/* =====================================================
+   NOTIFICATION BADGE on admin sidebar for violations
+===================================================== */
+function updateAdminBadges() {
+  var violCount = HM_DB.violations.length;
+  var loginCount = HM_DB.loginHistory.length;
+  /* Could add badge elements to sidebar items here */
+}
+
+/* On admin login, show notification */
+var _origAdminLogin = adminLogin;
+adminLogin = function() {
+  var u = document.getElementById('a-user').value.trim();
+  var p = document.getElementById('a-pass').value;
+  if (u === 'hexaminds' && p === 'hexaminds123') {
+    document.getElementById('login-page').classList.add('hidden');
+    document.getElementById('admin-app').classList.remove('hidden');
+    renderADash();
+    /* Show cross-device sync notice if there's history */
+    if (HM_DB.loginHistory.length > 0 || HM_DB.violations.length > 0) {
+      setTimeout(function(){
+        var notice = document.createElement('div');
+        notice.style.cssText = 'position:fixed;bottom:24px;right:24px;z-index:9999;background:#fff;border:1.5px solid var(--border);border-radius:18px;padding:16px 20px;box-shadow:0 8px 30px rgba(0,0,0,0.1);max-width:320px;animation:toastSlide .4s ease';
+        notice.innerHTML = '<div style="display:flex;gap:12px;align-items:flex-start">' +
+          '<div style="font-size:24px">📂</div>' +
+          '<div>' +
+            '<div style="font-weight:800;font-size:13px;color:var(--text);margin-bottom:4px">Persistent Data Loaded</div>' +
+            '<div style="font-size:12px;color:var(--text3)"><strong style="color:var(--cyan)">' + HM_DB.loginHistory.length + '</strong> login records &nbsp;·&nbsp; <strong style="color:var(--red)">' + HM_DB.violations.length + '</strong> violations found in storage.</div>' +
+          '</div>' +
+          '<button onclick="this.parentElement.parentElement.remove()" style="background:none;border:none;font-size:16px;color:var(--text3);cursor:pointer;flex-shrink:0">✕</button>' +
+        '</div>';
+        document.body.appendChild(notice);
+        setTimeout(function(){ if(notice.parentElement) notice.remove(); }, 6000);
+      }, 800);
+    }
+  } else {
+    var err = document.getElementById('login-err');
+    err.classList.remove('hidden');
+    err.style.animation = 'none';
+    setTimeout(function(){ err.style.animation = 'shake .35s ease'; }, 10);
+  }
+};
+</script>
+<script>
+/* ===== EXTRA ANTI-CHEAT (added) ===== */
+var multiFaceConsecutive = 0;
+document.addEventListener('contextmenu', function(e){ if (examActive) { e.preventDefault(); logViolation && logViolation('Right-Click Blocked','Context menu blocked during exam.','low'); } });
+document.addEventListener('copy', function(e){ if (examActive) { e.preventDefault(); logViolation && logViolation('Copy Blocked','Copying disabled during exam.','medium'); } });
+document.addEventListener('paste', function(e){ if (examActive) { e.preventDefault(); logViolation && logViolation('Paste Blocked','Pasting disabled during exam.','medium'); } });
+document.addEventListener('keydown', function(e){
+  if (!examActive) return;
+  if (e.key === 'F12' || (e.ctrlKey && e.shiftKey && ['I','J','C'].indexOf(e.key.toUpperCase())!==-1) || (e.ctrlKey && (e.key === 'u' || e.key === 'U' || e.key === 'p' || e.key === 'P' || e.key === 's' || e.key === 'S'))) {
+    e.preventDefault();
+    logViolation && logViolation('DevTools/Print Blocked','Attempted to open DevTools or print/save.','high');
+  }
+});
+/* Detect window blur (alt-tab) */
+window.addEventListener('blur', function(){
+  if (examActive) { logViolation && logViolation('Window Blur','Window lost focus — possible alt-tab.','high'); }
+});
+</script></body>
+</html>
