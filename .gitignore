@@ -1,0 +1,39 @@
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+npm-debug.log*
+
+# Environment variables (never commit these)
+.env
+.env.local
+.env.production
+
+# Node (if you ever add a build step)
+node_modules/
+package-lock.json
+
+# Python (if you ever add a local server script)
+__pycache__/
+*.pyc
+*.pyo
+venv/
+env/
+
+# Temp files
+*.tmp
+*.temp
