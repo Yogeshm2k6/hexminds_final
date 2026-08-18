@@ -1,41 +1,54 @@
-   VIOLATION SYSTEM
+/* =====================================================
+   VIOLATIONS & PROCTORING LOGIC
 ===================================================== */
-function showViolationFlash() {
-  var f = document.getElementById('viol-flash');
-  if (!f) return;
-  f.style.display = 'block';
-  setTimeout(function(){ f.style.display = 'none'; }, 400);
+
+var toastTimeout = null;
+
+function closeToast() {
+  var toast = document.getElementById('viol-toast');
+  if (toast) toast.classList.add('hidden');
+  if (toastTimeout) { clearTimeout(toastTimeout); toastTimeout = null; }
 }
 
 function showViolationAlert(title, msg, critical) {
-  var toast  = document.getElementById('viol-toast');
-  var ttitle = document.getElementById('vt-title');
-  var tmsg   = document.getElementById('vt-msg');
-  var tcount = document.getElementById('vt-count');
+  var toast = document.getElementById('viol-toast');
   if (!toast) return;
-  if (ttitle) ttitle.textContent = title;
-  if (tmsg)   tmsg.textContent   = msg;
-  if (tcount) tcount.textContent = '⚡ Violations: ' + violationCount + ' / ' + MAX_VIOLATIONS + '  •  Suspicion: ' + suspicionScore + '%  •  Auto-submit at ' + MAX_VIOLATIONS + ' (or instantly on phone / multi-face / no-face)';
+  var vtTitle = document.getElementById('vt-title');
+  var vtMsg = document.getElementById('vt-msg');
+  var vtCount = document.getElementById('vt-count');
+
+  if (vtTitle) vtTitle.textContent = title;
+  if (vtMsg) vtMsg.textContent = msg;
+  if (vtCount) vtCount.textContent = 'Violation #' + (typeof violationCount !== 'undefined' ? violationCount : 1) + ' recorded';
+
   toast.classList.remove('hidden');
-  toast.style.animation = 'none';
-  setTimeout(function(){ toast.style.animation = 'toastSlide .45s cubic-bezier(.16,1,.3,1)'; }, 10);
-  showViolationFlash();
-  clearTimeout(toastTimeout);
-  if (!critical) toastTimeout = setTimeout(closeToast, 7000);
+  if (toastTimeout) clearTimeout(toastTimeout);
+  if (!critical) {
+    toastTimeout = setTimeout(closeToast, 7000);
+  }
 }
 
-function closeToast() {
-  var t = document.getElementById('viol-toast');
-  if (t) t.classList.add('hidden');
+function logViolation(type, desc, severity) {
+  var photo = captureViolationPhoto();
+  var v = { type: type, time: new Date().toLocaleTimeString(), exam: 'Active Exam', severity: severity, desc: desc, photo: photo };
+  sessionViolations.push(v);
+  if (currentStudent.name && LIVE_SESSIONS[currentStudent.name]) {
+    LIVE_SESSIONS[currentStudent.name].violations.push(v);
+  }
+  /* Update suspicion score based on severity */
+  var inc = severity === 'high' ? 20 : 10;
+  updateSuspicionScore(inc);
+  var vc = document.getElementById('viol-count'); if (vc) { vc.textContent = violationCount; vc.style.animation = 'scoreUp .3s ease'; setTimeout(function(){ if(vc) vc.style.animation=''; }, 300); }
+
+  if (photo && typeof uploadViolationPhotoAsync === 'function') {
+    uploadViolationPhotoAsync(v, photo);
+  }
 }
 
 function captureViolationPhoto() {
-  var vid = document.getElementById('cam-video');
-  if (!vid) return null;
-  if (vid.tagName === 'VIDEO' && vid.readyState < 2) return null;
-  if (vid.tagName === 'IMG' && (!vid.complete || !vid.naturalWidth)) return null;
-  if (vid.style.display === 'none') return null;
   try {
+    var vid = document.getElementById('webcam');
+    if (!vid || !vid.videoWidth) return null;
     var canvas = document.createElement('canvas');
     canvas.width  = vid.naturalWidth  || vid.videoWidth  || 320;
     canvas.height = vid.naturalHeight || vid.videoHeight || 240;
@@ -50,20 +63,6 @@ function captureViolationPhoto() {
     ctx.fillText('⚠ VIOLATION ' + new Date().toLocaleTimeString(), 6, canvas.height - 7);
     return canvas.toDataURL('image/jpeg', .75);
   } catch(e) { return null; }
-}
-
-function logViolation(type, desc, severity) {
-  var photo = captureViolationPhoto();
-  var v = { type: type, time: new Date().toLocaleTimeString(), exam: 'CS101', severity: severity, desc: desc, photo: photo };
-  sessionViolations.push(v);
-  if (currentStudent.name && LIVE_SESSIONS[currentStudent.name]) {
-    LIVE_SESSIONS[currentStudent.name].violations.push(v);
-    try { localStorage.setItem('hm_violations_' + currentStudent.name, JSON.stringify(LIVE_SESSIONS[currentStudent.name].violations)); } catch(e){}
-  }
-  /* Update suspicion score based on severity */
-  var inc = severity === 'high' ? 20 : 10;
-  updateSuspicionScore(inc);
-  var vc = document.getElementById('viol-count'); if (vc) { vc.textContent = violationCount; vc.style.animation = 'scoreUp .3s ease'; setTimeout(function(){ if(vc) vc.style.animation=''; }, 300); }
 }
 
 function escalateProctorBar(label) {
@@ -83,5 +82,3 @@ function setCamStatus(msg, color) {
     cs.style.color = color === 'green' ? 'var(--green)' : color === 'red' ? 'var(--red)' : 'var(--amber)';
   }
 }
-
-/* =====================================================

@@ -4,12 +4,15 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>HexaMinds — AI Exam Proctoring</title>
-
 <!-- External Libraries -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/blazeface@0.0.7/dist/blazeface.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
+<!-- Firebase (App + Firestore) & CryptoJS (Cloudinary upload signing) -->
+<script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
 
 <!-- App Styles -->
@@ -199,6 +202,7 @@
       <div class="si" id="si-astudents" onclick="aNav('astudents',this)"><span class="si-icon">◈</span> Students</div>
       <div class="si" id="si-aviolations" onclick="aNav('aviolations',this)"><span class="si-icon">△</span> Violations</div>
       <div class="si" id="si-aexams" onclick="aNav('aexams',this)"><span class="si-icon">□</span> Exams</div>
+      <div class="si" id="si-aevaluate" onclick="aNav('aevaluate',this)"><span class="si-icon">📝</span> Evaluate</div>
       <div class="si" id="si-areports" onclick="aNav('areports',this)"><span class="si-icon">▲</span> Reports</div>
       <div class="si" id="si-aloginhistory" onclick="aNav('aloginhistory',this)"><span class="si-icon">🕐</span> Login History</div>
       <div class="si" id="si-amonitor" onclick="aNav('amonitor',this)"><span class="si-icon">👁</span> Live Monitor</div>

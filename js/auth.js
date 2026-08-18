@@ -237,8 +237,12 @@ function fvCaptureFace() {
   var desc = computeDescriptor(imgData.data, 160, 120);
   var faceKey = fvPendingStudent.name.toLowerCase() + '|' + fvPendingStudent.dob;
   var photoDataUrl = profileDataUrl;
-  registeredFaceData[faceKey] = { snapshot: photoDataUrl, desc: desc, college: fvPendingStudent.college };
+  registeredFaceData[faceKey] = { snapshot: photoDataUrl, desc: desc, college: fvPendingStudent.college, name: fvPendingStudent.name, dob: fvPendingStudent.dob };
   studentProfilePhoto = photoDataUrl; /* Store as profile photo */
+  /* Sync face data to Firestore immediately & upload photo to Cloudinary */
+  if (typeof firebaseSyncFaces === 'function') firebaseSyncFaces();
+  if (typeof firebaseSaveFace === 'function') firebaseSaveFace(faceKey, registeredFaceData[faceKey]);
+  if (typeof uploadFacePhotoAsync === 'function') uploadFacePhotoAsync(faceKey, photoDataUrl);
 
   /* Show captured image */
   var captureImg = document.createElement('img');
@@ -463,5 +467,3 @@ function logout() {
   lastFaceState = 'normal';
   noFaceConsecutive = 0;
 }
-
-/* =====================================================

@@ -1,3 +1,4 @@
+/* =====================================================
    ML MODELS — loaded once, reused across detection loops
 ===================================================== */
 var _blazefaceModel  = null;   /* BlazeFace — face count */
@@ -218,10 +219,7 @@ function handlePhoneDetectedML(objClass, confidence) {
   startAutoSubmitCountdown(label + ' detected in camera');
 
   /* Save to DB */
-  try {
-    HM_DB.violations.push({ student: currentStudent.name || 'Unknown', exam: 'CS101', ...v });
-    localStorage.setItem('hm_db', JSON.stringify(HM_DB));
-  } catch(e) {}
+  recordPersistentViolation(currentStudent.name || 'Unknown', v);
 }
 
 /* Pixel-variance last-resort fallback (presence only, no count) */
@@ -361,7 +359,7 @@ function submitExam(autoSubmit) {
     ls.status = 'online'; ls.score = pct; ls.grade = grade;
     ls.examSubmitted = true; ls.submitTime = new Date().toLocaleTimeString();
     ls.autoSubmitted = autoSubmit;
-    try { localStorage.setItem('hm_sessions', JSON.stringify(LIVE_SESSIONS)); } catch(e){}
+    if (typeof firebaseSyncSessions === 'function') firebaseSyncSessions();
   }
 
   var scoreColor = pct >= 70 ? 'var(--green)' : pct >= 50 ? 'var(--amber)' : 'var(--red)';

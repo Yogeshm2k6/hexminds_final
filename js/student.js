@@ -1,22 +1,40 @@
 /* =====================================================
-   STUDENT NAVIGATION
+   STUDENT NAVIGATION & PAGES
 ===================================================== */
 function sNav(page, el) {
   document.querySelectorAll('#student-app .si').forEach(function(i){ i.classList.remove('active'); });
-  el.classList.add('active');
+  if (el && el.classList) el.classList.add('active');
   if      (page === 'sdash')    renderSDash();
   else if (page === 'sjoin')    renderSJoin();
   else if (page === 'sresults') renderSResults();
 }
 
-/* =====================================================
-   STUDENT PAGES
-===================================================== */
 function renderSDash() {
   var initials = currentStudent.initials || '?';
   var profilePhotoHtml = studentProfilePhoto
     ? '<div style="width:56px;height:56px;border-radius:16px;background:linear-gradient(135deg,var(--cyan2),var(--blue));overflow:hidden;box-shadow:0 6px 20px var(--cyan-glow);border:2.5px solid var(--cyan);flex-shrink:0"><img src="' + studentProfilePhoto + '" style="width:100%;height:100%;object-fit:cover;border-radius:13px" /></div>'
     : '<div style="width:56px;height:56px;border-radius:16px;background:linear-gradient(135deg,var(--cyan2),var(--blue));display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:800;color:#fff;box-shadow:0 6px 20px var(--cyan-glow)">' + initials + '</div>';
+
+  var availCount = studentExams.filter(function(e){ return e.status !== 'completed'; }).length;
+  var compCount = studentExams.filter(function(e){ return e.status === 'completed'; }).length;
+  var completedScores = studentExams.filter(function(e){ return e.status === 'completed' && typeof e.score === 'number'; }).map(function(e){ return e.score; });
+  var avgPct = completedScores.length ? Math.round(completedScores.reduce(function(a,b){ return a+b; },0) / completedScores.length) : 0;
+  var avgGrade = completedScores.length ? (avgPct >= 90 ? 'A' : avgPct >= 80 ? 'B+' : avgPct >= 70 ? 'B' : avgPct >= 60 ? 'C' : 'F') : 'N/A';
+
+  var examsListHtml = studentExams.length > 0
+    ? studentExams.map(function(e){
+        return '<div style="display:flex;align-items:center;justify-content:space-between;padding:16px 0;border-bottom:1px solid var(--border)">' +
+          '<div>' +
+            '<div style="font-weight:700;font-size:14px;color:var(--text)">' + e.title + '</div>' +
+            '<div style="font-size:12px;color:var(--text3);margin-top:4px;font-family:\'JetBrains Mono\',monospace">' + (e.questions || 5) + ' Qs &nbsp;·&nbsp; ' + (e.duration || 60) + ' min &nbsp;·&nbsp; ' + (e.date || '') + '</div>' +
+          '</div>' +
+          (e.status === 'completed'
+            ? '<span class="badge badge-green">✓ Score: ' + e.score + (typeof e.score === 'number' ? '%' : '') + '</span>'
+            : '<button class="btn-primary btn-sm" onclick="startExam(' + e.id + ')">Start Exam →</button>') +
+        '</div>';
+      }).join('')
+    : '<div style="text-align:center;padding:24px;color:var(--text3);font-size:13px">No exams joined yet. Enter an access code below to join an exam.</div>';
+
   document.getElementById('s-content').innerHTML =
     '<div class="page-enter">' +
     '<div style="display:flex;align-items:center;gap:16px;margin-bottom:24px">' +
@@ -27,23 +45,13 @@ function renderSDash() {
       '</div>' +
     '</div>' +
     '<div class="stats-grid" style="grid-template-columns:repeat(3,1fr)">' +
-      '<div class="stat-card anim-fade-up delay-1"><div class="stat-label">Available Exams</div><div class="stat-value" style="color:var(--cyan)">2</div><div class="stat-sub">Ready to take</div></div>' +
-      '<div class="stat-card anim-fade-up delay-2"><div class="stat-label">Completed</div><div class="stat-value" style="color:var(--green)">1</div><div class="stat-sub">This semester</div></div>' +
-      '<div class="stat-card anim-fade-up delay-3"><div class="stat-label">Avg Score</div><div class="stat-value">82%</div><div class="stat-sub">Grade: B+</div></div>' +
+      '<div class="stat-card anim-fade-up delay-1"><div class="stat-label">Available Exams</div><div class="stat-value" style="color:var(--cyan)">' + availCount + '</div><div class="stat-sub">Ready to take</div></div>' +
+      '<div class="stat-card anim-fade-up delay-2"><div class="stat-label">Completed</div><div class="stat-value" style="color:var(--green)">' + compCount + '</div><div class="stat-sub">This semester</div></div>' +
+      '<div class="stat-card anim-fade-up delay-3"><div class="stat-label">Avg Score</div><div class="stat-value">' + (completedScores.length ? avgPct + '%' : 'N/A') + '</div><div class="stat-sub">Grade: ' + avgGrade + '</div></div>' +
     '</div>' +
     '<div class="card anim-fade-up delay-2" style="margin-bottom:16px">' +
       '<div class="section-title">📋 Your Exams</div>' +
-      studentExams.map(function(e){
-        return '<div style="display:flex;align-items:center;justify-content:space-between;padding:16px 0;border-bottom:1px solid var(--border)">' +
-          '<div>' +
-            '<div style="font-weight:700;font-size:14px;color:var(--text)">' + e.title + '</div>' +
-            '<div style="font-size:12px;color:var(--text3);margin-top:4px;font-family:\'JetBrains Mono\',monospace">' + e.questions + ' Qs &nbsp;·&nbsp; ' + e.duration + ' min &nbsp;·&nbsp; ' + e.date + '</div>' +
-          '</div>' +
-          (e.status === 'completed'
-            ? '<span class="badge badge-green">✓ Score: ' + e.score + '%</span>'
-            : '<button class="btn-primary btn-sm" onclick="startExam(' + e.id + ')">Start Exam →</button>') +
-        '</div>';
-      }).join('') +
+      examsListHtml +
     '</div>' +
     '<div class="card anim-fade-up delay-3">' +
       '<div class="section-title">🔑 Join with Exam Code</div>' +
@@ -68,15 +76,24 @@ function renderSJoin() {
 }
 
 function renderSResults() {
+  var completedExams = studentExams.filter(function(e){ return e.status === 'completed'; });
+  var tableContent = completedExams.length > 0
+    ? completedExams.map(function(e){
+        var sc = typeof e.score === 'number' ? e.score + '%' : e.score || 'Pending';
+        var gr = typeof e.score === 'number' ? (e.score >= 90 ? 'A' : e.score >= 80 ? 'B+' : e.score >= 70 ? 'B' : e.score >= 60 ? 'C' : 'F') : 'Pending';
+        return '<tr><td style="font-weight:700;color:var(--text)">' + e.title + '</td><td style="color:var(--text3)">' + (e.date || 'Today') + '</td>' +
+          '<td style="font-weight:700;color:var(--green);font-family:\'JetBrains Mono\',monospace">' + sc + '</td>' +
+          '<td style="font-weight:700;color:var(--cyan)">' + gr + '</td><td><span class="badge badge-green">' + (typeof e.score === 'number' && e.score < 50 ? 'Review' : 'Submitted') + '</span></td></tr>';
+      }).join('')
+    : '<tr><td colspan="5" style="text-align:center;padding:24px;color:var(--text3)">No completed exam results yet.</td></tr>';
+
   document.getElementById('s-content').innerHTML =
     '<div class="page-enter">' +
     '<div class="page-title">My Results</div>' +
     '<div class="page-sub">Your exam history and performance analytics</div>' +
     '<div class="card" style="margin-bottom:16px">' +
       '<table><thead><tr><th>Exam</th><th>Date</th><th>Score</th><th>Grade</th><th>Status</th></tr></thead><tbody>' +
-        '<tr><td style="font-weight:700;color:var(--text)">World History Quiz</td><td style="color:var(--text3)">Apr 20, 2026</td>' +
-        '<td style="font-weight:700;color:var(--green);font-family:\'JetBrains Mono\',monospace">82%</td>' +
-        '<td style="font-weight:700;color:var(--cyan)">B+</td><td><span class="badge badge-green">Pass</span></td></tr>' +
+        tableContent +
       '</tbody></table>' +
     '</div>' +
     (sessionViolations.length > 0
@@ -121,7 +138,7 @@ function startExam(id) {
   if (currentStudent.name && LIVE_SESSIONS[currentStudent.name]) {
     LIVE_SESSIONS[currentStudent.name].status   = 'exam';
     LIVE_SESSIONS[currentStudent.name].examStarted = true;
-    LIVE_SESSIONS[currentStudent.name].examName = 'CS101';
+    LIVE_SESSIONS[currentStudent.name].examName = 'Active Exam';
     LIVE_SESSIONS[currentStudent.name].examStart = new Date().toLocaleTimeString();
   }
   renderExam(id);
@@ -131,7 +148,9 @@ function startExam(id) {
    EXAM RENDER
 ===================================================== */
 function renderExam(id) {
-  var exam = studentExams.find(function(e){ return e.id === id; }) || studentExams[0];
+  var exam = studentExams.find(function(e){ return e.id === id; }) || EXAMS.find(function(e){ return e.id === id; }) || { title: 'Exam', questions: QUESTIONS };
+  var examQuestions = (exam.questions && Array.isArray(exam.questions)) ? exam.questions : QUESTIONS;
+  
   document.getElementById('s-content').innerHTML =
     '<div style="display:grid;grid-template-columns:1fr 260px;gap:18px" class="page-enter">' +
       /* Left: Questions */
@@ -143,7 +162,7 @@ function renderExam(id) {
         '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">' +
           '<div>' +
             '<div class="page-title" style="margin-bottom:2px;font-size:18px">' + exam.title + '</div>' +
-            '<div style="font-size:12px;color:var(--text3)">' + QUESTIONS.length + ' questions &nbsp;·&nbsp; Browser-proctored</div>' +
+            '<div style="font-size:12px;color:var(--text3)">' + examQuestions.length + ' questions &nbsp;·&nbsp; Browser-proctored</div>' +
           '</div>' +
           '<div style="text-align:right">' +
             '<div style="font-size:10px;color:var(--text3);margin-bottom:4px;font-weight:700;text-transform:uppercase;letter-spacing:.6px">Time Remaining</div>' +
@@ -151,11 +170,11 @@ function renderExam(id) {
           '</div>' +
         '</div>' +
         '<div id="qs-area">' +
-          QUESTIONS.map(function(q, i){
+          examQuestions.map(function(q, i){
             return '<div class="q-block" style="animation:cardEntrance .4s ' + (i*0.07) + 's ease both">' +
-              '<div style="font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.8px;margin-bottom:12px">Question ' + (i+1) + ' <span style="color:var(--border2)">/ ' + QUESTIONS.length + '</span></div>' +
+              '<div style="font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.8px;margin-bottom:12px">Question ' + (i+1) + ' <span style="color:var(--border2)">/ ' + examQuestions.length + '</span></div>' +
               '<div style="font-size:14px;color:var(--text);margin-bottom:16px;font-weight:600;line-height:1.6">' + q.q + '</div>' +
-              q.opts.map(function(opt, j){
+              (q.opts || []).map(function(opt, j){
                 return '<div class="q-opt" id="opt-' + q.id + '-' + j + '" onclick="pickAns(' + q.id + ',' + j + ')">' +
                   '<div class="q-radio"><div class="q-radio-in"></div></div>' + opt + '</div>';
               }).join('') +
@@ -214,10 +233,10 @@ function renderExam(id) {
         '<div class="card" style="padding:16px">' +
           '<div class="section-title" style="font-size:12px;margin-bottom:10px">Question Navigator</div>' +
           '<div class="q-nav-grid" id="q-nav">' +
-            QUESTIONS.map(function(q, i){ return '<div class="q-nav-btn" id="nav-' + q.id + '" onclick="scrollToQ(' + i + ')">' + (i+1) + '</div>'; }).join('') +
+            examQuestions.map(function(q, i){ return '<div class="q-nav-btn" id="nav-' + q.id + '" onclick="scrollToQ(' + i + ')">' + (i+1) + '</div>'; }).join('') +
           '</div>' +
           '<div class="divider"></div>' +
-          '<div style="font-size:12px;color:var(--text2)">Answered: <strong id="ans-count" style="color:var(--cyan)">0</strong> / ' + QUESTIONS.length + '</div>' +
+          '<div style="font-size:12px;color:var(--text2)">Answered: <strong id="ans-count" style="color:var(--cyan)">0</strong> / ' + examQuestions.length + '</div>' +
           '<div style="height:4px;background:var(--border);border-radius:5px;margin-top:7px">' +
             '<div id="ans-bar" style="height:100%;background:linear-gradient(90deg,var(--cyan2),var(--blue));border-radius:5px;width:0%;transition:width .4s ease;box-shadow:0 0 8px var(--cyan-glow)"></div>' +
           '</div>' +
@@ -232,6 +251,3 @@ function renderExam(id) {
   startExamMonitoring();
   startWaveform();
 }
-
-/* =====================================================
-   CAMERA — getUserMedia + Face Detection API

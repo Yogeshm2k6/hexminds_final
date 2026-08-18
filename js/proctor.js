@@ -1,3 +1,4 @@
+/* =====================================================
    EXAM MONITORING
 ===================================================== */
 function startExamMonitoring() {
@@ -570,5 +571,3 @@ function startCam() {
       if (ph) ph.innerHTML = '<div style="text-align:center;padding:20px"><div style="font-size:28px;color:#f87171;margin-bottom:8px">⛔</div><div style="font-size:11px;color:var(--red);line-height:1.7">' + msg + '<br><br>Allow camera access and reload.</div></div>';
     });
 }
-
-/* =====================================================
