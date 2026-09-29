@@ -4,7 +4,7 @@
    Backed by Firebase Firestore & Cloudinary Media Storage
 ===================================================== */
 
-/* In-memory DB (backed exclusively to Firestore) */
+/* In-memory DB (backed by localStorage cache and synced to Firestore) */
 var HM_DB = {
   loginHistory: [],   /* [{name, college, device, ip, time, date, photo}] */
   violations: [],     /* [{student, time, date, type, severity, desc, photo, exam}] */
@@ -12,7 +12,24 @@ var HM_DB = {
   submissions: []
 };
 
+// Load from localStorage cache on boot
+(function() {
+  try {
+    var raw = localStorage.getItem('hm_db');
+    if (raw) {
+      var cached = JSON.parse(raw);
+      if (cached && typeof cached === 'object') {
+        if (Array.isArray(cached.loginHistory)) HM_DB.loginHistory = cached.loginHistory;
+        if (Array.isArray(cached.violations)) HM_DB.violations = cached.violations;
+        if (Array.isArray(cached.removedStudents)) HM_DB.removedStudents = cached.removedStudents;
+        if (Array.isArray(cached.submissions)) HM_DB.submissions = cached.submissions;
+      }
+    }
+  } catch(e) {}
+})();
+
 function saveHMDB() {
+  try { localStorage.setItem('hm_db', JSON.stringify(HM_DB)); } catch(e) {}
   /* Sync to Firestore individual collections */
   if (typeof firebaseSyncDb === 'function') firebaseSyncDb();
 }
@@ -20,11 +37,13 @@ function saveHMDB() {
 /* Record a login event */
 function recordLoginHistory(student, photo) {
   if (!HM_DB.loginHistory) HM_DB.loginHistory = [];
+  var studentId = student.studentId || student.id || '';
   var entry = {
     id: Date.now(),
     name: student.name,
-    college: student.college,
-    dob: student.dob,
+    studentId: studentId,
+    college: student.college || '',
+    dob: student.dob || '',
     time: new Date().toLocaleTimeString(),
     date: new Date().toLocaleDateString(),
     fullTimestamp: new Date().toISOString(),
@@ -39,19 +58,24 @@ function recordLoginHistory(student, photo) {
   if (typeof firebaseSaveLoginEntry === 'function') {
     firebaseSaveLoginEntry(entry);
   }
+  if (entry.photo && typeof uploadLoginPhotoAsync === 'function') {
+    uploadLoginPhotoAsync(entry, entry.photo);
+  }
   return entry;
 }
 
 /* Record a violation with photo persistently */
 function recordPersistentViolation(studentName, violation) {
   if (!HM_DB.violations) HM_DB.violations = [];
+  var studentId = (window.currentStudent && (currentStudent.studentId || currentStudent.id)) || '';
   var entry = {
     id: Date.now(),
     student: studentName,
+    studentId: studentId,
     type: violation.type,
     severity: violation.severity,
     desc: violation.desc,
-    exam: violation.exam || 'Active Exam',
+    exam: violation.exam || (window.currentExamId || 'CS101'),
     time: violation.time || new Date().toLocaleTimeString(),
     date: new Date().toLocaleDateString(),
     fullTimestamp: new Date().toISOString(),
@@ -64,6 +88,9 @@ function recordPersistentViolation(studentName, violation) {
   // Sync to Firestore violations collection & upload photo if base64
   if (typeof firebaseSaveViolationEntry === 'function') {
     firebaseSaveViolationEntry(entry);
+  }
+  if (entry.photo && typeof uploadViolationPhotoAsync === 'function') {
+    uploadViolationPhotoAsync(entry, entry.photo);
   }
 }
 

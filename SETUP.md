@@ -86,6 +86,39 @@ For a production version, a backend (Firebase/Supabase) would be needed.
 
 ---
 
+## Real-time Facial Biometric Verification (InsightFace + ArcFace)
+
+HexaMinds integrates state-of-the-art **InsightFace + ArcFace** deep feature embedding (512-D vectors) with **OpenCV** and multi-modal **Anti-Spoofing / Liveness Detection**.
+
+### 1. Install Requirements
+```bash
+pip install -r backend/requirements.txt
+```
+
+### 2. Start Biometrics Engine (Port 5000)
+```bash
+python backend/biometrics_service.py
+```
+*Model weights (`buffalo_sc`) are cached automatically in `~/.insightface/models/` for sub-second startup.*
+
+### 3. How Verification Works
+- **Registration**: Student takes a profile photo during signup. The system extracts a 512-D ArcFace normalized embedding and stores it in `backend/embeddings_vault.json` linked to their Student ID.
+- **Real-Time Proctoring**: During exams, the camera feeds frames every 1.2s to `/api/biometrics/verify`.
+  - **Match Decision**: Computes normalized **Cosine Similarity** ($\cos(\theta)$). If similarity $\ge 0.52$, access is **ALLOWED** with a live HUD percentage badge.
+  - **Impersonation**: If a different person sits in front of the camera, access is **BLOCKED** and an impersonation violation is logged.
+  - **Liveness / Anti-Spoofing**: Inspects high-frequency FFT screen moiré patterns, Laplacian sharpness, and micro-motion to block smartphone screen replays or printed photos.
+  - **Multiple / No Faces**: Alerts immediately if $\ge 2$ faces appear or candidate leaves.
+  - **Zero Downtime Fallback**: If the Python service is offline, the system transparently falls back to client-side biometrics without breaking the exam flow.
+
+### 4. Configuration & Calibration
+Adjust settings in `backend/biometrics_config.json`:
+- `arcface_match_threshold`: Minimum cosine similarity for a match (default: `0.52`).
+- `liveness_threshold`: Anti-spoofing confidence threshold (default: `0.55`).
+- `consistency_frames`: Number of consecutive frames needed before state change (default: `3`).
+- `service_port`: Port for Flask REST API (default: `5000`).
+
+---
+
 ## Browser Compatibility
 
 | Browser | Support |

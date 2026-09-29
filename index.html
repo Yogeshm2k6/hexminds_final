@@ -13,10 +13,12 @@
 <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+<script src="js/config.js?v=2.2"></script>
+<script src="js/firebase-cloudinary.js?v=2.2"></script>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
 
 <!-- App Styles -->
-<link rel="stylesheet" href="css/styles.css">
+<link rel="stylesheet" href="css/styles.css?v=2.2">
 </head>
 <div id="root">
 <canvas id="login-canvas"></canvas>
@@ -29,8 +31,9 @@
       <div class="logo-title">HEXAMINDS</div>
       <p class="logo-sub">Secure AI-Powered Exam Proctoring</p>
     </div>
-    <div class="role-tabs">
+    <div class="role-tabs" style="grid-template-columns:repeat(3,1fr)">
       <div class="role-tab active" id="tab-student" onclick="setRole('student')">👤 &nbsp;Student</div>
+      <div class="role-tab" id="tab-staff" onclick="setRole('staff')">👨‍🏫 &nbsp;Staff</div>
       <div class="role-tab" id="tab-admin" onclick="setRole('admin')">🛡 &nbsp;Admin</div>
     </div>
     <!-- Student fields -->
@@ -51,12 +54,38 @@
           <input id="r-name" placeholder="Enter your full name" />
         </div>
         <div class="form-group">
+          <label class="form-label">Student ID / Roll Number (Optional)</label>
+          <input id="r-roll" placeholder="Leave blank to auto-generate (e.g. HM-STU-1001)" />
+        </div>
+        <div class="form-group">
           <label class="form-label">Date of Birth</label>
           <input id="r-dob" type="date" />
         </div>
         <div class="form-group">
           <label class="form-label">College / Institution</label>
-          <input id="r-college" placeholder="e.g. RNSIT College" />
+          <input id="r-college" placeholder="e.g. HexaMinds Institute of Technology" />
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          <div class="form-group">
+            <label class="form-label">Department</label>
+            <select id="r-dept" style="width:100%;padding:10px 12px;background:var(--bg2);border:1.5px solid var(--border);border-radius:10px;font-size:13px;color:var(--text);outline:none">
+              <option value="Computer Science & Engineering">Computer Science (CSE)</option>
+              <option value="Information Science & Engineering">Information Science (ISE)</option>
+              <option value="Electronics & Communication Engineering">Electronics & Comm. (ECE)</option>
+              <option value="Artificial Intelligence & Data Science">AI & Data Science (AI&DS)</option>
+              <option value="Mechanical Engineering">Mechanical (MECH)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Academic Year</label>
+            <select id="r-year" style="width:100%;padding:10px 12px;background:var(--bg2);border:1.5px solid var(--border);border-radius:10px;font-size:13px;color:var(--text);outline:none">
+              <option value="1st Year">1st Year</option>
+              <option value="2nd Year">2nd Year</option>
+              <option value="3rd Year" selected>3rd Year</option>
+              <option value="4th Year">4th Year</option>
+              <option value="Postgraduate">Postgraduate</option>
+            </select>
+          </div>
         </div>
         <div id="reg-err" class="hidden" style="font-size:12px;color:#f87171;margin-bottom:12px;padding:10px 14px;background:rgba(239,68,68,0.1);border-radius:10px;border:1px solid rgba(239,68,68,0.3);font-weight:600"></div>
         <button class="btn-primary" style="width:100%;padding:13px;font-size:14px;letter-spacing:.5px" onclick="studentRegister()">
@@ -86,15 +115,68 @@
         </div>
       </div>
     </div>
+
+    <!-- Staff fields -->
+    <div id="staff-fields" class="hidden">
+      <!-- Staff sub-tabs: Login / Register -->
+      <div style="display:flex;border:1.5px solid var(--border);border-radius:10px;margin-bottom:22px;overflow:hidden;background:var(--bg2);padding:3px;gap:3px">
+        <div id="staff-tab-login" class="role-tab active" onclick="setStaffTab('login')" style="flex:1;padding:9px;font-size:12px;border-radius:8px">🔑 &nbsp;Staff Login</div>
+        <div id="staff-tab-register" class="role-tab" onclick="setStaffTab('register')" style="flex:1;padding:9px;font-size:12px;border-radius:8px">✨ &nbsp;New Staff</div>
+      </div>
+
+      <!-- STAFF LOGIN PANEL -->
+      <div id="staff-login-panel">
+        <div class="form-group">
+          <label class="form-label">Staff Username or Email</label>
+          <input id="staff-user" placeholder="e.g. staff" autocomplete="username" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Password</label>
+          <input id="staff-pass" type="password" placeholder="e.g. staff123" autocomplete="current-password" />
+        </div>
+        <div id="staff-login-err" class="hidden" style="font-size:12px;color:#f87171;margin-bottom:12px;padding:10px 14px;background:rgba(239,68,68,0.1);border-radius:10px;border:1px solid rgba(239,68,68,0.3);font-weight:600"></div>
+        <button class="btn-primary" style="width:100%;padding:13px;font-size:14px;letter-spacing:.5px" onclick="staffLogin()">
+          SIGN IN AS STAFF →
+        </button>
+        <div style="font-size:11px;color:var(--text3);text-align:center;margin-top:12px">
+          Default staff account: <strong style="color:var(--cyan)">staff</strong> / <strong style="color:var(--cyan)">staff123</strong>
+        </div>
+      </div>
+
+      <!-- STAFF REGISTER PANEL -->
+      <div id="staff-register-panel" class="hidden">
+        <div class="form-group">
+          <label class="form-label">Full Name</label>
+          <input id="staff-reg-name" placeholder="e.g. Dr. Priya Rao" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Department / Subject</label>
+          <input id="staff-reg-dept" placeholder="e.g. Computer Science" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Username</label>
+          <input id="staff-reg-user" placeholder="Choose a username" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Password</label>
+          <input id="staff-reg-pass" type="password" placeholder="Create a password" />
+        </div>
+        <div id="staff-reg-err" class="hidden" style="font-size:12px;color:#f87171;margin-bottom:12px;padding:10px 14px;background:rgba(239,68,68,0.1);border-radius:10px;border:1px solid rgba(239,68,68,0.3);font-weight:600"></div>
+        <button class="btn-primary" style="width:100%;padding:13px;font-size:14px;letter-spacing:.5px" onclick="staffRegister()">
+          CREATE STAFF PROFILE →
+        </button>
+      </div>
+    </div>
+
     <!-- Admin fields -->
     <div id="admin-fields" class="hidden">
       <div class="form-group">
         <label class="form-label">Admin Username</label>
-        <input id="a-user" placeholder="Enter username" autocomplete="new-password" />
+        <input id="a-user" placeholder="Enter username (hexaminds)" autocomplete="new-password" />
       </div>
       <div class="form-group">
         <label class="form-label">Password</label>
-        <input id="a-pass" type="password" placeholder="Enter password" autocomplete="new-password" />
+        <input id="a-pass" type="password" placeholder="Enter password (hexaminds123)" autocomplete="new-password" />
       </div>
       <div id="login-err" class="hidden" style="font-size:12px;color:#f87171;margin-bottom:12px;padding:10px 14px;background:rgba(239,68,68,0.1);border-radius:10px;border:1px solid rgba(239,68,68,0.3);font-weight:600">
         ⚠ Invalid credentials. Please try again.
@@ -180,6 +262,35 @@
   </div>
 </div>
 
+<!-- ============ STAFF APP ============ -->
+<div id="staff-app" class="hidden">
+  <div class="topnav">
+    <div class="logo">
+      <div class="logo-icon" style="background:linear-gradient(135deg,#6366f1,#8b5cf6)">HM</div>
+      <span>Hexa<span>Minds</span></span>
+      <span style="font-size:10px;font-weight:700;color:#c7d2fe;margin-left:6px;padding:3px 10px;background:rgba(99,102,241,0.2);border-radius:20px;border:1px solid rgba(99,102,241,0.4);letter-spacing:.5px">STAFF</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:14px">
+      <span class="live-dot" style="background:#8b5cf6;box-shadow:0 0 8px #8b5cf6"></span>
+      <span id="staff-nav-info" style="font-size:12px;color:var(--text2);font-weight:600">Prof. Sharma (CS Dept)</span>
+      <div class="avatar" id="staff-avatar" style="background:linear-gradient(135deg,#6366f1,#a855f7);font-size:12px">ST</div>
+      <button class="btn-outline btn-sm" onclick="logout()">Logout</button>
+    </div>
+  </div>
+  <div class="main-layout">
+    <div class="sidebar">
+      <div class="si-label">Faculty Workspace</div>
+      <div class="si active" id="si-staff-dash" onclick="staffNav('sdash',this)"><span class="si-icon">⊞</span> Dashboard</div>
+      <div class="si" id="si-staff-exams" onclick="staffNav('sexams',this)"><span class="si-icon">□</span> Manage & Publish Exams</div>
+      <div class="si" id="si-staff-eval" onclick="staffNav('seval',this)"><span class="si-icon">📝</span> Evaluation Panel</div>
+      <div class="si" id="si-staff-students" onclick="staffNav('sstudents',this)"><span class="si-icon">◈</span> Students Directory</div>
+      <div class="si-label">Session</div>
+      <div class="si" onclick="logout()"><span class="si-icon">◁</span> Logout</div>
+    </div>
+    <div class="content" id="staff-content"></div>
+  </div>
+</div>
+
 <!-- ============ ADMIN APP ============ -->
 <div id="admin-app" class="hidden">
   <div class="topnav">
@@ -200,6 +311,8 @@
       <div class="si-label">Command Center</div>
       <div class="si active" id="si-adash" onclick="aNav('adash',this)"><span class="si-icon">⊞</span> Dashboard</div>
       <div class="si" id="si-astudents" onclick="aNav('astudents',this)"><span class="si-icon">◈</span> Students</div>
+      <div class="si" id="si-astaff" onclick="aNav('astaff',this)"><span class="si-icon">👥</span> Faculty & Staff</div>
+      <div class="si" id="si-adepts" onclick="aNav('adepts',this)"><span class="si-icon">🏛</span> Departments</div>
       <div class="si" id="si-aviolations" onclick="aNav('aviolations',this)"><span class="si-icon">△</span> Violations</div>
       <div class="si" id="si-aexams" onclick="aNav('aexams',this)"><span class="si-icon">□</span> Exams</div>
       <div class="si" id="si-aevaluate" onclick="aNav('aevaluate',this)"><span class="si-icon">📝</span> Evaluate</div>
@@ -215,18 +328,18 @@
 
 
 <!-- App Scripts (load order matters) -->
-<script src="js/state.js"></script>
-<script src="js/data.js"></script>
-<script src="js/particles.js"></script>
-<script src="js/suspicion.js"></script>
-<script src="js/auth.js"></script>
-<script src="js/violations.js"></script>
-<script src="js/student.js"></script>
-<script src="js/exam.js"></script>
-<script src="js/camera.js"></script>
-<script src="js/proctor.js"></script>
-<script src="js/storage.js"></script>
-<script src="js/admin.js"></script>
-<script src="js/patches.js"></script>
+<script src="js/state.js?v=2.3"></script>
+<script src="js/data.js?v=2.3"></script>
+<script src="js/particles.js?v=2.3"></script>
+<script src="js/suspicion.js?v=2.3"></script>
+<script src="js/auth.js?v=2.3"></script>
+<script src="js/violations.js?v=2.3"></script>
+<script src="js/student.js?v=2.3"></script>
+<script src="js/exam.js?v=2.3"></script>
+<script src="js/camera.js?v=2.3"></script>
+<script src="js/proctor.js?v=2.3"></script>
+<script src="js/storage.js?v=2.3"></script>
+<script src="js/admin.js?v=2.3"></script>
+<script src="js/patches.js?v=2.3"></script>
 </body>
 </html>

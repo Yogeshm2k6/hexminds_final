@@ -47,7 +47,7 @@ function logViolation(type, desc, severity) {
 
 function captureViolationPhoto() {
   try {
-    var vid = document.getElementById('webcam');
+    var vid = document.getElementById('cam-video') || document.getElementById('webcam') || document.querySelector('video');
     if (!vid || !vid.videoWidth) return null;
     var canvas = document.createElement('canvas');
     canvas.width  = vid.naturalWidth  || vid.videoWidth  || 320;
@@ -61,7 +61,7 @@ function captureViolationPhoto() {
     ctx.fillStyle = '#ef4444';
     ctx.font = 'bold 10px monospace';
     ctx.fillText('⚠ VIOLATION ' + new Date().toLocaleTimeString(), 6, canvas.height - 7);
-    return canvas.toDataURL('image/jpeg', .75);
+    return canvas.toDataURL('image/jpeg', .85);
   } catch(e) { return null; }
 }
 

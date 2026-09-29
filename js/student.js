@@ -118,8 +118,36 @@ function renderSResults() {
     '</div>';
 }
 
-function joinCode()  { var c=(document.getElementById('code-inp')||{}).value||''; if(c) startExam(1); else alert('Enter an exam code.'); }
-function joinCode2() { var c=(document.getElementById('join-code')||{}).value||''; if(c) startExam(1); else alert('Enter an exam code.'); }
+function joinCode() {
+  var c = ((document.getElementById('code-inp')||{}).value||'').trim().toUpperCase();
+  if (!c) { alert('Please enter an exam code.'); return; }
+  var ex = EXAMS.find(function(e){ return (e.code||'').toUpperCase() === c; }) || studentExams.find(function(e){ return (e.code||'').toUpperCase() === c; });
+  if (!ex) {
+    // If demo code CS101, default to first exam
+    if (c === 'CS101' && EXAMS.length > 0) ex = EXAMS[0];
+    else { alert('Exam code "' + c + '" not found. Please verify with your instructor.'); return; }
+  }
+  if (ex.published === false) {
+    alert('This exam is currently in Draft (Unpublished) mode. Please wait for faculty to publish it.');
+    return;
+  }
+  startExam(ex.id);
+}
+
+function joinCode2() {
+  var c = ((document.getElementById('join-code')||{}).value||'').trim().toUpperCase();
+  if (!c) { alert('Please enter an exam code.'); return; }
+  var ex = EXAMS.find(function(e){ return (e.code||'').toUpperCase() === c; }) || studentExams.find(function(e){ return (e.code||'').toUpperCase() === c; });
+  if (!ex) {
+    if (c === 'CS101' && EXAMS.length > 0) ex = EXAMS[0];
+    else { alert('Exam code "' + c + '" not found. Please verify with your instructor.'); return; }
+  }
+  if (ex.published === false) {
+    alert('This exam is currently in Draft (Unpublished) mode. Please wait for faculty to publish it.');
+    return;
+  }
+  startExam(ex.id);
+}
 
 function startExam(id) {
   examAnswers = {};
@@ -132,6 +160,22 @@ function startExam(id) {
   noFaceWarningCount = 0;
   multipleFacesAutoSubmitted = false;
   phoneDetected = false;
+  _impersonationFrames = 0;
+  _impersonationViolationLogged = false;
+
+  /* Ensure candidate biometric template and profile photo are ready */
+  if (currentStudent && currentStudent.name && (!currentStudent.desc || !currentStudent.profilePhoto)) {
+    var faceKey = (currentStudent.name||'').toLowerCase() + '|' + (currentStudent.dob||'');
+    var stored = (typeof registeredFaceData !== 'undefined') ? registeredFaceData[faceKey] : null;
+    if (stored) {
+      if (stored.desc) currentStudent.desc = stored.desc;
+      if (stored.snapshot) {
+        currentStudent.profilePhoto = stored.snapshot;
+        studentProfilePhoto = stored.snapshot;
+      }
+    }
+  }
+
   clearInterval(examTimer);
   examActive = true;
 
@@ -192,6 +236,18 @@ function renderExam(id) {
           '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">' +
             '<div class="section-title" style="font-size:12px;margin-bottom:0">📹 Camera Monitor</div>' +
             '<span class="badge badge-live" style="font-size:9px">LIVE</span>' +
+          '</div>' +
+          '<div style="display:flex;align-items:center;justify-content:space-between;background:var(--bg2);padding:9px 12px;border-radius:12px;margin-bottom:12px;border:1px solid var(--border)">' +
+            '<div style="display:flex;align-items:center;gap:10px">' +
+              (studentProfilePhoto
+                ? '<div style="width:34px;height:34px;border-radius:50%;overflow:hidden;border:2px solid var(--cyan);flex-shrink:0;background-image:url(' + studentProfilePhoto + ');background-size:cover;background-position:center"></div>'
+                : '<div class="avatar" style="width:34px;height:34px;border-radius:50%;font-size:11px;border:2px solid var(--cyan);flex-shrink:0">' + (currentStudent.initials||'S') + '</div>') +
+              '<div>' +
+                '<div style="font-size:11px;font-weight:700;color:var(--text);line-height:1.2">Live Biometric Check</div>' +
+                '<div id="live-profile-compare-status" style="font-size:10px;color:var(--text3);line-height:1.2;margin-top:2px">Comparing live feed with profile photo…</div>' +
+              '</div>' +
+            '</div>' +
+            '<div id="biometric-match-badge" class="badge badge-cyan" style="font-size:10px;font-weight:700">✓ ArcFace Active</div>' +
           '</div>' +
           '<div class="cam-feed" id="cam-box">' +
             '<div id="cam-placeholder" style="text-align:center;padding:24px">' +

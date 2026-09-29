@@ -12,6 +12,8 @@
   resize();
   window.addEventListener('resize', resize);
 
+  var particles = window.particles || [];
+  window.particles = particles;
   for (var i = 0; i < 80; i++) {
     particles.push({
       x: Math.random() * window.innerWidth,

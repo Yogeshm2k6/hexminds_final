@@ -1,0 +1,9 @@
+{
+  "arcface_match_threshold": 0.45,
+  "liveness_threshold": 0.48,
+  "consistency_frames": 2,
+  "max_allowed_faces": 1,
+  "anti_spoofing_enabled": true,
+  "service_port": 5000,
+  "insightface_model_name": "buffalo_sc"
+}

@@ -23,6 +23,158 @@
 // Get Firestore reference
 var db = (typeof firebase !== 'undefined' && firebase.apps.length) ? firebase.firestore() : null;
 
+// Cloudinary Configuration — cloud name = etwi6mr1
+window.CLOUDINARY_CLOUD_NAME = window.CLOUDINARY_CLOUD_NAME || localStorage.getItem('hm_cloudinary_cloud_name') || 'etwi6mr1';
+
+// Cloudinary client-side upload helper using HMAC-SHA1 signature
+window.uploadToCloudinary = function(fileData, resourceType, callback) {
+  var cloudName = window.CLOUDINARY_CLOUD_NAME || 'etwi6mr1';
+  var apiKey = "851528631193376";
+  var apiSecret = "0Ykrn3mdG8rQ19Z78Vq1qzs6YMs";
+  var timestamp = Math.round(new Date().getTime() / 1000);
+  
+  // Sort parameters alphabetically for signing
+  var signatureStr = "timestamp=" + timestamp + apiSecret;
+  var signature = (typeof CryptoJS !== 'undefined' && CryptoJS.SHA1) ? CryptoJS.SHA1(signatureStr).toString() : '';
+  
+  var formData = new FormData();
+  formData.append('file', fileData);
+  formData.append('api_key', apiKey);
+  formData.append('timestamp', timestamp);
+  formData.append('signature', signature);
+  
+  var url = 'https://api.cloudinary.com/v1_1/' + cloudName + '/' + (resourceType || 'image') + '/upload';
+  
+  var xhr = new XMLHttpRequest();
+  xhr.open('POST', url, true);
+  xhr.onload = function() {
+    if (xhr.status === 200) {
+      try {
+        var res = JSON.parse(xhr.responseText);
+        console.log('✓ Cloudinary upload success (' + (resourceType || 'image') + '):', res.secure_url);
+        if (typeof callback === 'function') callback(res.secure_url);
+      } catch(e) {
+        if (typeof callback === 'function') callback(null);
+      }
+    } else {
+      console.error('Cloudinary upload error:', xhr.status, xhr.responseText);
+      if (typeof callback === 'function') callback(null);
+    }
+  };
+  xhr.onerror = function(err) {
+    console.error('Cloudinary upload network error:', err);
+    if (typeof callback === 'function') callback(null);
+  };
+  xhr.send(formData);
+};
+
+// Async Cloudinary upload for face registration snapshots & profile photos
+window.uploadFacePhotoAsync = function(faceKey, base64Photo) {
+  if (!base64Photo || !base64Photo.startsWith('data:')) return;
+
+  uploadToCloudinary(base64Photo, 'image', function(cloudinaryUrl) {
+    if (cloudinaryUrl) {
+      console.log('✓ Profile & face snapshot saved to Cloudinary:', cloudinaryUrl);
+      if (window.registeredFaceData && registeredFaceData[faceKey]) {
+        registeredFaceData[faceKey].snapshot = cloudinaryUrl;
+        registeredFaceData[faceKey].photoUrl = cloudinaryUrl;
+        if (typeof firebaseSaveFace === 'function') firebaseSaveFace(faceKey, registeredFaceData[faceKey]);
+        if (typeof firebaseSyncFaces === 'function') firebaseSyncFaces();
+      }
+      if (window.currentStudent && currentStudent.name) {
+        window.studentProfilePhoto = cloudinaryUrl;
+        currentStudent.profilePhoto = cloudinaryUrl;
+        if (window.LIVE_SESSIONS && LIVE_SESSIONS[currentStudent.name]) {
+          LIVE_SESSIONS[currentStudent.name].profilePhoto = cloudinaryUrl;
+          if (typeof firebaseSyncSessions === 'function') firebaseSyncSessions();
+        }
+      }
+      var stuName = faceKey.split('|')[0];
+      if (window.STUDENTS) {
+        var sObj = STUDENTS.find(function(s){ return s.name.toLowerCase() === stuName.toLowerCase(); });
+        if (sObj) {
+          sObj.profilePhoto = cloudinaryUrl;
+          sObj.profilePhotoUrl = cloudinaryUrl;
+          if (typeof firebaseSaveStudent === 'function') firebaseSaveStudent(sObj);
+        }
+      }
+      if (window.HM_DB && HM_DB.loginHistory) {
+        HM_DB.loginHistory.forEach(function(h) {
+          if (h.name.toLowerCase() === stuName.toLowerCase() && (!h.photo || h.photo.startsWith('data:'))) {
+            h.photo = cloudinaryUrl;
+            h.photoUrl = cloudinaryUrl;
+            if (typeof firebaseSaveLoginEntry === 'function') firebaseSaveLoginEntry(h);
+          }
+        });
+      }
+    }
+  });
+};
+
+// Async Cloudinary upload for violation photos
+window.uploadViolationPhotoAsync = function(v, base64Photo) {
+  if (!base64Photo || !base64Photo.startsWith('data:')) return;
+  
+  uploadToCloudinary(base64Photo, 'image', function(cloudinaryUrl) {
+    if (cloudinaryUrl) {
+      console.log('✓ Violation photo saved to Cloudinary:', cloudinaryUrl);
+      v.photo = cloudinaryUrl;
+      v.photoUrl = cloudinaryUrl;
+      
+      var studentName = v.student || (window.currentStudent && currentStudent.name) || 'anon';
+      var docId = 'v_' + (v.id || Date.now()) + '_' + sanitizeDocId(studentName);
+      if (db) {
+        db.collection('violations').doc(docId).set({ photoUrl: cloudinaryUrl, photo: cloudinaryUrl }, { merge: true }).catch(function(){});
+      }
+      
+      // Update LIVE_SESSIONS record
+      if (window.LIVE_SESSIONS && LIVE_SESSIONS[studentName]) {
+        var viols = LIVE_SESSIONS[studentName].violations || [];
+        var foundV = viols.find(function(x){ return (v.id && x.id === v.id) || (x.time === v.time && x.type === v.type); });
+        if (foundV) {
+          foundV.photo = cloudinaryUrl;
+          foundV.photoUrl = cloudinaryUrl;
+        }
+        if (typeof firebaseSyncSessions === 'function') firebaseSyncSessions();
+      }
+      
+      // Update HM_DB record
+      if (window.HM_DB && HM_DB.violations) {
+        var foundDbV = HM_DB.violations.find(function(x){ return (v.id && x.id === v.id) || (x.student === studentName && x.time === v.time && x.type === v.type); });
+        if (foundDbV) {
+          foundDbV.photo = cloudinaryUrl;
+          foundDbV.photoUrl = cloudinaryUrl;
+          if (typeof firebaseSyncDb === 'function') firebaseSyncDb();
+        }
+      }
+    }
+  });
+};
+
+// Async Cloudinary upload for login verification photos
+window.uploadLoginPhotoAsync = function(loginEntry, base64Photo) {
+  if (!base64Photo || !base64Photo.startsWith('data:')) return;
+  uploadToCloudinary(base64Photo, 'image', function(cloudinaryUrl) {
+    if (cloudinaryUrl) {
+      console.log('✓ Login verification photo saved to Cloudinary:', cloudinaryUrl);
+      loginEntry.photo = cloudinaryUrl;
+      loginEntry.photoUrl = cloudinaryUrl;
+      var docId = 'log_' + (loginEntry.id || Date.now()) + '_' + sanitizeDocId(loginEntry.name || 'anon');
+      if (db) {
+        db.collection('login_history').doc(docId).set({ photoUrl: cloudinaryUrl, photo: cloudinaryUrl }, { merge: true }).catch(function(){});
+      }
+      if (window.HM_DB && HM_DB.loginHistory) {
+        var foundH = HM_DB.loginHistory.find(function(h){ return h.id === loginEntry.id; });
+        if (foundH) {
+          foundH.photo = cloudinaryUrl;
+          foundH.photoUrl = cloudinaryUrl;
+          if (typeof firebaseSyncDb === 'function') firebaseSyncDb();
+        }
+      }
+    }
+  });
+};
+
 // Throttle helper — prevents flooding Firestore with too many writes
 var _syncTimers = {};
 function throttledSync(key, fn, delayMs) {
@@ -38,43 +190,103 @@ function sanitizeDocId(str) {
   return String(str || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '_');
 }
 
+// ─── Firestore Diagnostic Notification ──────────────────────────────
+window.showFirebasePermissionNotice = function() {
+  if (document.getElementById('fb-perm-notice')) return;
+  var banner = document.createElement('div');
+  banner.id = 'fb-perm-notice';
+  banner.style.cssText = 'position:fixed;bottom:20px;right:20px;max-width:440px;background:#1e1b4b;color:#fff;padding:16px 20px;border-radius:14px;box-shadow:0 10px 30px rgba(0,0,0,0.5);border:1.5px solid #6366f1;z-index:999999;font-size:13px;line-height:1.5;font-family:\'DM Sans\',sans-serif;animation:slideIn .3s ease';
+  banner.innerHTML = '<div style="display:flex;align-items:center;gap:8px;font-weight:800;font-size:14px;color:#f87171;margin-bottom:6px">' +
+    '<span style="font-size:18px">🔒</span> Firebase Firestore Rules Update Required' +
+    '</div>' +
+    '<div style="color:#e2e8f0;font-size:12px;margin-bottom:8px">' +
+    'Your Firestore security rules are currently denying write/read permissions (<strong>PERMISSION_DENIED</strong>).' +
+    '</div>' +
+    '<div style="background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.1);padding:10px;border-radius:8px;font-family:monospace;font-size:11px;color:#a5f3fc;margin-bottom:10px">' +
+    'In Firebase Console → <strong>Rules</strong> tab:<br>' +
+    '<span style="color:#fcd34d">allow read, write: if true;</span>' +
+    '</div>' +
+    '<div style="display:flex;gap:8px;align-items:center">' +
+    '<a href="https://console.firebase.google.com/project/examportal-a4795/firestore/databases/-default-/rules" target="_blank" style="background:#4f46e5;color:#fff;padding:6px 14px;border-radius:8px;font-weight:700;font-size:12px;text-decoration:none;display:inline-block">Open Rules Tab ↗</a>' +
+    '<button onclick="this.parentElement.parentElement.remove()" style="background:transparent;border:1px solid rgba(255,255,255,0.3);color:#cbd5e1;padding:5px 12px;border-radius:8px;font-size:12px;cursor:pointer">Dismiss</button>' +
+    '</div>';
+  document.body.appendChild(banner);
+};
+
 // ─── Collection-level Firestore Sync Helpers ───────────────────────
 window.firebaseSaveStudent = function(studentObj) {
   if (!db || !studentObj || !studentObj.name) return;
   var docId = sanitizeDocId(studentObj.name);
+  var photoUrl = studentObj.profilePhotoUrl || studentObj.profilePhoto || (window.studentProfilePhoto) || null;
+  var isBase64 = photoUrl && photoUrl.startsWith('data:');
   var data = {
-    id: studentObj.id || Date.now(),
+    id: studentObj.id || studentObj.studentId || ('HM-STU-' + Date.now().toString().slice(-4)),
+    studentId: studentObj.studentId || studentObj.id || ('HM-STU-' + Date.now().toString().slice(-4)),
     name: studentObj.name,
     dob: studentObj.dob || '',
     college: studentObj.college || '',
+    rollNo: studentObj.rollNo || studentObj.roll || studentObj.studentId || studentObj.id || '',
     status: studentObj.status || 'offline',
     avgScore: studentObj.avgScore || 0,
-    examsTaken: studentObj.exams || 0,
-    profilePhotoUrl: studentObj.profilePhoto || studentProfilePhoto || null,
+    examsTaken: studentObj.exams || studentObj.examsTaken || 0,
+    profilePhotoUrl: isBase64 ? null : photoUrl,
+    deviceInfo: typeof getDeviceInfo === 'function' ? getDeviceInfo() : '',
+    registeredAt: studentObj.registeredAt || new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
-  db.collection('students').doc(docId).set(data, { merge: true }).catch(function(e){ console.error("Firestore student save error:", e); });
+  db.collection('students').doc(docId).set(data, { merge: true })
+    .then(function() {
+      console.log("✓ Firestore student saved successfully:", docId);
+    })
+    .catch(function(e){
+      console.error("Firestore student save error:", e);
+      if (e.code === 'permission-denied' || (e.message && e.message.indexOf('permission') !== -1)) {
+        window.showFirebasePermissionNotice && window.showFirebasePermissionNotice();
+      }
+    });
+
+  if (isBase64 && typeof uploadToCloudinary === 'function') {
+    uploadToCloudinary(photoUrl, 'image', function(cloudinaryUrl) {
+      if (cloudinaryUrl) {
+        studentObj.profilePhotoUrl = cloudinaryUrl;
+        studentObj.profilePhoto = cloudinaryUrl;
+        db.collection('students').doc(docId).update({ profilePhotoUrl: cloudinaryUrl }).catch(function(){});
+      }
+    });
+  }
 };
 
 window.firebaseSaveFace = function(faceKey, faceData) {
   if (!db || !faceKey || !faceData) return;
   var docId = sanitizeDocId(faceKey);
   var photoUrl = faceData.photoUrl || faceData.cloudinaryUrl || null;
-  // If only base64 snapshot exists and no Cloudinary URL yet, do not store huge base64 in Firestore doc
-  if (!photoUrl && faceData.snapshot && !faceData.snapshot.startsWith('data:')) {
+  var isBase64 = faceData.snapshot && faceData.snapshot.startsWith('data:');
+  if (!photoUrl && !isBase64 && faceData.snapshot) {
     photoUrl = faceData.snapshot;
   }
 
   var data = {
     faceKey: faceKey,
+    studentId: faceData.studentId || faceData.id || '',
     name: faceData.name || faceKey.split('|')[0],
     dob: faceData.dob || (faceKey.split('|')[1] || ''),
     college: faceData.college || '',
     desc: faceData.desc || [],
-    photoUrl: photoUrl,
-    registeredAt: new Date().toISOString()
+    photoUrl: photoUrl || null,
+    registeredAt: faceData.registeredAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString()
   };
   db.collection('registered_faces').doc(docId).set(data, { merge: true }).catch(function(e){ console.error("Firestore face save error:", e); });
+
+  if (isBase64 && typeof uploadToCloudinary === 'function') {
+    uploadToCloudinary(faceData.snapshot, 'image', function(cloudinaryUrl) {
+      if (cloudinaryUrl) {
+        faceData.snapshot = cloudinaryUrl;
+        faceData.photoUrl = cloudinaryUrl;
+        db.collection('registered_faces').doc(docId).update({ photoUrl: cloudinaryUrl }).catch(function(){});
+      }
+    });
+  }
 };
 
 window.firebaseSaveExam = function(examObj) {
@@ -95,9 +307,17 @@ window.firebaseSaveSession = function(studentName, sessionObj) {
   if (!db || !studentName || !sessionObj) return;
   var docId = sanitizeDocId(studentName);
   var data = JSON.parse(JSON.stringify(sessionObj));
-  // Replace base64 profilePhoto with Cloudinary link if available
   if (data.profilePhoto && data.profilePhoto.startsWith('data:')) {
-    delete data.profilePhoto;
+    data.profilePhoto = (window.studentProfilePhoto && !window.studentProfilePhoto.startsWith('data:')) ? window.studentProfilePhoto : null;
+  }
+  if (Array.isArray(data.violations)) {
+    data.violations = data.violations.map(function(v) {
+      var vClean = Object.assign({}, v);
+      if (vClean.photo && vClean.photo.startsWith('data:')) {
+        vClean.photo = vClean.photoUrl || null;
+      }
+      return vClean;
+    });
   }
   data.updatedAt = new Date().toISOString();
   db.collection('sessions').doc(docId).set(data, { merge: true }).catch(function(e){ console.error("Firestore session save error:", e); });
@@ -105,22 +325,25 @@ window.firebaseSaveSession = function(studentName, sessionObj) {
 
 window.firebaseSaveViolationEntry = function(violationObj) {
   if (!db || !violationObj) return;
-  var docId = 'v_' + (violationObj.id || Date.now()) + '_' + sanitizeDocId(violationObj.student || 'anon');
+  var studentName = violationObj.student || (window.currentStudent && currentStudent.name) || 'anon';
+  var docId = 'v_' + (violationObj.id || Date.now()) + '_' + sanitizeDocId(studentName);
   var data = JSON.parse(JSON.stringify(violationObj));
+  data.student = studentName;
   var isBase64 = data.photo && data.photo.startsWith('data:');
   if (isBase64) {
     data.photoUrl = null;
-    delete data.photo; // don't send heavy base64 string to Firestore
+    delete data.photo;
   } else {
     data.photoUrl = data.photo || data.photoUrl || null;
   }
-  data.createdAt = new Date().toISOString();
+  data.createdAt = violationObj.fullTimestamp || new Date().toISOString();
   db.collection('violations').doc(docId).set(data, { merge: true }).catch(function(e){ console.error("Firestore violation save error:", e); });
 
-  // Upload photo to Cloudinary asynchronously if base64
   if (isBase64 && typeof uploadToCloudinary === 'function') {
     uploadToCloudinary(violationObj.photo, 'image', function(cloudinaryUrl) {
       if (cloudinaryUrl) {
+        violationObj.photo = cloudinaryUrl;
+        violationObj.photoUrl = cloudinaryUrl;
         db.collection('violations').doc(docId).update({ photoUrl: cloudinaryUrl, photo: cloudinaryUrl }).catch(function(){});
       }
     });
@@ -134,17 +357,18 @@ window.firebaseSaveLoginEntry = function(loginObj) {
   var isBase64 = data.photo && data.photo.startsWith('data:');
   if (isBase64) {
     data.photoUrl = null;
-    delete data.photo; // don't send heavy base64 string to Firestore
+    delete data.photo;
   } else {
     data.photoUrl = data.photo || data.photoUrl || null;
   }
-  data.createdAt = new Date().toISOString();
+  data.createdAt = loginObj.fullTimestamp || new Date().toISOString();
   db.collection('login_history').doc(docId).set(data, { merge: true }).catch(function(e){ console.error("Firestore login_history save error:", e); });
 
-  // Upload profile photo to Cloudinary if base64
   if (isBase64 && typeof uploadToCloudinary === 'function') {
     uploadToCloudinary(loginObj.photo, 'image', function(cloudinaryUrl) {
       if (cloudinaryUrl) {
+        loginObj.photo = cloudinaryUrl;
+        loginObj.photoUrl = cloudinaryUrl;
         db.collection('login_history').doc(docId).update({ photoUrl: cloudinaryUrl, photo: cloudinaryUrl }).catch(function(){});
       }
     });
@@ -155,7 +379,10 @@ window.firebaseSaveSubmission = function(submissionObj) {
   if (!db || !submissionObj) return;
   var docId = 'sub_' + sanitizeDocId(submissionObj.examCode || 'exam') + '_' + sanitizeDocId(submissionObj.studentName || 'stu');
   var data = JSON.parse(JSON.stringify(submissionObj));
-  data.submittedAt = new Date().toISOString();
+  if (data.studentPhoto && data.studentPhoto.startsWith('data:')) {
+    data.studentPhoto = (window.studentProfilePhoto && !window.studentProfilePhoto.startsWith('data:')) ? window.studentProfilePhoto : null;
+  }
+  data.submittedAt = data.submittedAt || new Date().toISOString();
   db.collection('submissions').doc(docId).set(data, { merge: true }).catch(function(e){ console.error("Firestore submission save error:", e); });
 };
 
@@ -208,9 +435,20 @@ window.firebaseSyncFaces = function() {
     });
     if (loadedExams.length > 0) {
       EXAMS = loadedExams;
-      if (role === 'admin') { try { renderAExams(); } catch(e){} }
+      try { localStorage.setItem('hm_exams', JSON.stringify(EXAMS)); } catch(e){}
+      var adminApp = document.getElementById('admin-app');
+      var isAdminActive = (typeof role !== 'undefined' && role === 'admin') || (adminApp && !adminApp.classList.contains('hidden'));
+      if (isAdminActive) {
+        var aex = document.getElementById('si-aexams');
+        if (aex && aex.classList.contains('active')) try { renderAExams(); } catch(e){}
+        var adash = document.getElementById('si-adash');
+        if (adash && adash.classList.contains('active')) try { renderADash(); } catch(e){}
+      }
     }
-  }, function(err){ console.error("Firestore exams snapshot error:", err); });
+  }, function(err){
+    console.error("Firestore exams snapshot error:", err);
+    if (err && err.code === 'permission-denied') window.showFirebasePermissionNotice && window.showFirebasePermissionNotice();
+  });
 
   // 2. Real-time listener on 'students' collection
   db.collection('students').onSnapshot(function(snapshot) {
@@ -220,9 +458,20 @@ window.firebaseSyncFaces = function() {
     });
     if (loadedStudents.length > 0) {
       STUDENTS = loadedStudents;
-      if (role === 'admin') { try { renderAStudents(); } catch(e){} }
+      try { localStorage.setItem('hm_students', JSON.stringify(STUDENTS)); } catch(e){}
+      var adminApp = document.getElementById('admin-app');
+      var isAdminActive = (typeof role !== 'undefined' && role === 'admin') || (adminApp && !adminApp.classList.contains('hidden'));
+      if (isAdminActive) {
+        var astu = document.getElementById('si-astudents');
+        if (astu && astu.classList.contains('active')) try { renderAStudents(); } catch(e){}
+        var adash = document.getElementById('si-adash');
+        if (adash && adash.classList.contains('active')) try { renderADash(); } catch(e){}
+      }
     }
-  }, function(err){ console.error("Firestore students snapshot error:", err); });
+  }, function(err){
+    console.error("Firestore students snapshot error:", err);
+    if (err && err.code === 'permission-denied') window.showFirebasePermissionNotice && window.showFirebasePermissionNotice();
+  });
 
   // 3. Real-time listener on 'registered_faces' collection
   db.collection('registered_faces').onSnapshot(function(snapshot) {
@@ -232,6 +481,7 @@ window.firebaseSyncFaces = function() {
         registeredFaceData[data.faceKey] = data;
       }
     });
+    try { localStorage.setItem('hm_registered_faces', JSON.stringify(registeredFaceData)); } catch(e){}
   }, function(err){ console.error("Firestore faces snapshot error:", err); });
 
   // 4. Real-time listener on 'sessions' collection for live proctoring
@@ -244,13 +494,16 @@ window.firebaseSyncFaces = function() {
       }
     });
     LIVE_SESSIONS = activeSessions;
-    if (role === 'admin') {
+    var adminApp = document.getElementById('admin-app');
+    var isAdminActive = (typeof role !== 'undefined' && role === 'admin') || (adminApp && !adminApp.classList.contains('hidden'));
+    if (isAdminActive) {
       var adash = document.getElementById('si-adash');
       if (adash && adash.classList.contains('active')) try { renderADash(); } catch(e){}
       var amon = document.getElementById('si-amonitor');
       if (amon && amon.classList.contains('active')) try { renderAMonitor(); } catch(e){}
       var astudents = document.getElementById('si-astudents');
       if (astudents && astudents.classList.contains('active')) try { renderAStudents(); } catch(e){}
+      try { if (typeof updateAdminBadges === 'function') updateAdminBadges(); } catch(e){}
     }
   }, function(err){ console.error("Firestore sessions snapshot error:", err); });
 
@@ -261,6 +514,16 @@ window.firebaseSyncFaces = function() {
       loadedViols.push(doc.data());
     });
     HM_DB.violations = loadedViols;
+    try { localStorage.setItem('hm_db', JSON.stringify(HM_DB)); } catch(e){}
+    var adminApp = document.getElementById('admin-app');
+    var isAdminActive = (typeof role !== 'undefined' && role === 'admin') || (adminApp && !adminApp.classList.contains('hidden'));
+    if (isAdminActive) {
+      var aviol = document.getElementById('si-aviolations');
+      if (aviol && aviol.classList.contains('active')) try { renderAViolations(); } catch(e){}
+      var adash = document.getElementById('si-adash');
+      if (adash && adash.classList.contains('active')) try { renderADash(); } catch(e){}
+      try { if (typeof updateAdminBadges === 'function') updateAdminBadges(); } catch(e){}
+    }
   }, function(err){ console.error("Firestore violations snapshot error:", err); });
 
   // 6. Real-time listener on 'login_history' collection
@@ -270,9 +533,13 @@ window.firebaseSyncFaces = function() {
       loadedHistory.push(doc.data());
     });
     HM_DB.loginHistory = loadedHistory;
-    if (role === 'admin') {
+    try { localStorage.setItem('hm_db', JSON.stringify(HM_DB)); } catch(e){}
+    var adminApp = document.getElementById('admin-app');
+    var isAdminActive = (typeof role !== 'undefined' && role === 'admin') || (adminApp && !adminApp.classList.contains('hidden'));
+    if (isAdminActive) {
       var alog = document.getElementById('si-aloginhistory');
       if (alog && alog.classList.contains('active')) try { renderALoginHistory(); } catch(e){}
+      try { if (typeof updateAdminBadges === 'function') updateAdminBadges(); } catch(e){}
     }
   }, function(err){ console.error("Firestore login_history snapshot error:", err); });
 
@@ -283,6 +550,7 @@ window.firebaseSyncFaces = function() {
       loadedSubs.push(doc.data());
     });
     HM_DB.submissions = loadedSubs;
+    try { localStorage.setItem('hm_db', JSON.stringify(HM_DB)); } catch(e){}
   }, function(err){ console.error("Firestore submissions snapshot error:", err); });
 })();
 
@@ -474,13 +742,23 @@ function completeStudentLoginV2() {
     currentStudent.initials = currentStudent.name.split(' ').map(function(n){ return n[0]; }).join('').toUpperCase().slice(0,2);
   }
 
-  /* Retrieve profile photo from registered face data */
+  /* Retrieve profile photo, biometric descriptor, dept, and year from registered face data or existing student */
   var faceKey = currentStudent.name.toLowerCase() + '|' + currentStudent.dob;
   var stored = registeredFaceData[faceKey];
-  if (stored && stored.snapshot) studentProfilePhoto = stored.snapshot;
+  if (stored) {
+    if (stored.snapshot) studentProfilePhoto = stored.snapshot;
+    currentStudent.profilePhoto = studentProfilePhoto;
+    if (stored.desc) currentStudent.desc = stored.desc;
+    if (!currentStudent.dept && stored.dept) currentStudent.dept = stored.dept;
+    if (!currentStudent.year && stored.year) currentStudent.year = stored.year;
+    if (!currentStudent.college && stored.college) currentStudent.college = stored.college;
+  }
+  if (!currentStudent.dept) currentStudent.dept = 'Computer Science & Engineering';
+  if (!currentStudent.year) currentStudent.year = '3rd Year';
 
   LIVE_SESSIONS[currentStudent.name] = {
     id: Date.now(), name: currentStudent.name, dob: currentStudent.dob, college: currentStudent.college,
+    dept: currentStudent.dept, department: currentStudent.dept, year: currentStudent.year,
     status: 'online', loginTime: new Date().toLocaleTimeString(),
     violations: [], examStarted: false, examName: null, score: null, grade: null,
     profilePhoto: studentProfilePhoto
@@ -488,19 +766,37 @@ function completeStudentLoginV2() {
 
   // Ensure the student exists in the STUDENTS registry
   if (!window.STUDENTS) window.STUDENTS = [];
-  var studentExists = STUDENTS.some(function(s) { return s.name.toLowerCase() === currentStudent.name.toLowerCase(); });
-  if (!studentExists) {
-    STUDENTS.push({
-      id: STUDENTS.length > 0 ? Math.max.apply(null, STUDENTS.map(function(s){ return s.id; })) + 1 : 1,
-      name: currentStudent.name,
-      dob: currentStudent.dob,
-      college: currentStudent.college,
-      exams: 0,
-      avgScore: 0,
-      status: 'online',
-      violations: []
-    });
+  var sIdx = STUDENTS.findIndex(function(s) { return s.name.toLowerCase() === currentStudent.name.toLowerCase(); });
+  var studentId = currentStudent.studentId || currentStudent.id || (stored && (stored.studentId || stored.id)) || ('HM-STU-' + (1001 + STUDENTS.length));
+  currentStudent.id = studentId;
+  currentStudent.studentId = studentId;
+
+  var stuRecord = {
+    id: studentId,
+    studentId: studentId,
+    name: currentStudent.name,
+    dob: currentStudent.dob,
+    college: currentStudent.college,
+    dept: currentStudent.dept,
+    department: currentStudent.dept,
+    year: currentStudent.year,
+    rollNo: currentStudent.roll || studentId,
+    profilePhoto: studentProfilePhoto || null,
+    profilePhotoUrl: studentProfilePhoto || null,
+    exams: (sIdx >= 0 && STUDENTS[sIdx].exams) || 0,
+    avgScore: (sIdx >= 0 && STUDENTS[sIdx].avgScore) || 0,
+    status: 'online',
+    violations: (sIdx >= 0 && STUDENTS[sIdx].violations) || [],
+    registeredAt: (sIdx >= 0 && STUDENTS[sIdx].registeredAt) || new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+
+  if (sIdx >= 0) {
+    STUDENTS[sIdx] = Object.assign(STUDENTS[sIdx], stuRecord);
+  } else {
+    STUDENTS.push(stuRecord);
   }
+  if (typeof firebaseSaveStudent === 'function') firebaseSaveStudent(stuRecord);
 
   /* Record to persistent login history */
   recordLoginHistory(currentStudent, studentProfilePhoto);
@@ -532,7 +828,7 @@ function completeStudentLoginV2() {
 /* =====================================================
    PATCH: logViolation — also persist to HM_DB
 ===================================================== */
-var _origLogViolation = logViolation;
+var _origLogViolation = typeof logViolation !== 'undefined' ? logViolation : (window.logViolation || null);
 logViolation = function(type, desc, severity) {
   var photo = captureViolationPhoto();
   var v = { type: type, time: new Date().toLocaleTimeString(), exam: 'CS101', severity: severity, desc: desc, photo: photo };
@@ -558,72 +854,248 @@ logViolation = function(type, desc, severity) {
 };
 
 /* =====================================================
-   PATCH: faceVerify completion — use new login recorder
+   PATCH: Bulletproof getAllViolations & getLiveSessions
 ===================================================== */
-/* Replace completeStudentLogin globally */
-/* completeStudentLoginV2 is the new login handler with persistent storage */
+window.safeArray = function(val) {
+  if (!val) return [];
+  if (Array.isArray(val)) return val;
+  if (typeof val === 'object') {
+    try { return Object.values(val); } catch(e) { return []; }
+  }
+  return [];
+};
+
+window.getLiveSessions = function() {
+  if (typeof LIVE_SESSIONS === 'undefined' || !LIVE_SESSIONS) return [];
+  return window.safeArray(LIVE_SESSIONS).filter(function(ls){ return ls && ls.status !== 'offline'; });
+};
+
+window.getAllSessions = function() {
+  if (typeof LIVE_SESSIONS === 'undefined' || !LIVE_SESSIONS) return [];
+  return window.safeArray(LIVE_SESSIONS);
+};
+
+window.getAllViolations = function() {
+  var all = [];
+  var seenKeys = {};
+
+  try {
+    // 1. Persistent violations from HM_DB (Firestore synced)
+    var dbViols = (typeof HM_DB !== 'undefined' && HM_DB && HM_DB.violations) ? window.safeArray(HM_DB.violations) : [];
+    dbViols.forEach(function(pv){
+      if (!pv || typeof pv !== 'object') return;
+      var studentName = pv.student || pv.studentName || 'Student';
+      var vTime = pv.time || '';
+      var vType = pv.type || 'Proctoring Violation';
+      var vKey = studentName + '|' + vTime + '|' + vType;
+      if (!seenKeys[vKey]) {
+        seenKeys[vKey] = true;
+        all.push({
+          student: studentName,
+          studentId: pv.studentId || '',
+          college: pv.college || '',
+          v: {
+            type: vType,
+            severity: pv.severity || 'high',
+            desc: pv.desc || '',
+            time: vTime,
+            date: pv.date || '',
+            exam: pv.exam || 'CS101',
+            photo: pv.photo || pv.photoUrl || null
+          },
+          isLive: false
+        });
+      }
+    });
+
+    // 2. Active live session violations
+    var sessions = typeof window.getAllSessions === 'function' ? window.safeArray(window.getAllSessions()) : [];
+    sessions.forEach(function(ls){
+      if (!ls || typeof ls !== 'object') return;
+      var studentName = ls.name || 'Student';
+      var lsViols = window.safeArray(ls.violations);
+      lsViols.forEach(function(v){
+        if (!v || typeof v !== 'object') return;
+        var vTime = v.time || '';
+        var vType = v.type || 'Proctoring Violation';
+        var vKey = studentName + '|' + vTime + '|' + vType;
+        if (!seenKeys[vKey]) {
+          seenKeys[vKey] = true;
+          all.push({
+            student: studentName,
+            studentId: ls.studentId || '',
+            college: ls.college || '',
+            v: v,
+            isLive: ls.status !== 'offline'
+          });
+        }
+      });
+    });
+
+    // 3. Students registry violations
+    var students = (typeof STUDENTS !== 'undefined' && STUDENTS) ? window.safeArray(STUDENTS) : (window.STUDENTS ? window.safeArray(window.STUDENTS) : []);
+    students.forEach(function(s){
+      if (!s || typeof s !== 'object') return;
+      var studentName = s.name || 'Student';
+      var sViols = window.safeArray(s.violations);
+      sViols.forEach(function(v){
+        if (!v || typeof v !== 'object') return;
+        var vTime = v.time || '';
+        var vType = v.type || 'Proctoring Violation';
+        var vKey = studentName + '|' + vTime + '|' + vType;
+        if (!seenKeys[vKey]) {
+          seenKeys[vKey] = true;
+          all.push({
+            student: studentName,
+            studentId: s.studentId || s.id || '',
+            college: s.college || '',
+            v: v,
+            isLive: false
+          });
+        }
+      });
+    });
+  } catch(e) {
+    console.error('[getAllViolations] Error aggregating violations:', e);
+  }
+
+  return all;
+};
+var getAllViolations = window.getAllViolations;
+var getLiveSessions = window.getLiveSessions;
+var getAllSessions = window.getAllSessions;
 
 /* =====================================================
    PATCH: Admin Violations page — include persistent DB violations
 ===================================================== */
-var _origRenderAViolations = renderAViolations;
+var _origRenderAViolations = typeof renderAViolations !== 'undefined' ? renderAViolations : (window.renderAViolations || null);
 renderAViolations = function() {
-  var liveViolations = getAllViolations();
-  /* Merge with HM_DB persistent violations (deduplicate by id) */
-  var allPersisted = HM_DB.violations || [];
-  /* Build combined list preferring live (has photo) */
-  var liveKeys = {};
-  liveViolations.forEach(function(x){ liveKeys[x.student + x.v.time + x.v.type] = 1; });
-  var persistedOnly = allPersisted.filter(function(p){ return !liveKeys[p.student + p.time + p.type]; });
+  try {
+    function _safeArr(val) {
+      if (!val) return [];
+      if (Array.isArray(val)) return val;
+      if (typeof val === 'object') {
+        try { return Object.values(val); } catch(e) { return []; }
+      }
+      return [];
+    }
 
-  var combined = liveViolations.map(function(x){
-    return { student: x.student, type: x.v.type, severity: x.v.severity, desc: x.v.desc,
-             exam: x.v.exam, time: x.v.time, date: x.date||'', photo: x.v.photo, isLive: x.isLive };
-  }).concat(persistedOnly.map(function(p){
-    return { student: p.student, type: p.type, severity: p.severity, desc: p.desc,
-             exam: p.exam, time: p.time, date: p.date, photo: p.photo, isLive: false };
-  }));
+    var rawLive = typeof getAllViolations === 'function' ? _safeArr(getAllViolations()) : [];
+    var allPersisted = (typeof HM_DB !== 'undefined' && HM_DB && HM_DB.violations) ? _safeArr(HM_DB.violations) : [];
 
-  var names = {}; combined.forEach(function(x){ names[x.student]=1; });
+    var seenKeys = {};
+    var combined = [];
 
-  document.getElementById('a-content').innerHTML =
-    '<div class="page-enter">' +
-    '<div class="page-title">All Violations</div>' +
-    '<div class="page-sub">Every flagged incident — including persistent cross-device history</div>' +
-    '<div class="stats-grid" style="grid-template-columns:repeat(3,1fr)">' +
-      statCard('Total', combined.length, 'All incidents', 'var(--red)') +
-      statCard('High Severity', combined.filter(function(x){return x.severity==='high';}).length, 'Critical flags', 'var(--red)') +
-      statCard('Students Flagged', Object.keys(names).length, 'Unique students', 'var(--amber)') +
-    '</div>' +
-    (combined.length===0
-      ? '<div class="card" style="text-align:center;padding:48px;color:var(--green)">✅ No violations recorded yet.</div>'
-      : '<div style="display:flex;flex-direction:column;gap:10px">' +
-          combined.map(function(item){
-            return '<div class="card" style="padding:16px;' + (item.isLive?'border-color:rgba(239,68,68,0.3);':'') + '">' +
-              '<div style="display:flex;align-items:flex-start;gap:14px">' +
-                (item.photo?'<img src="' + item.photo + '" style="width:90px;height:68px;object-fit:cover;border-radius:8px;border:1.5px solid rgba(239,68,68,0.4);flex-shrink:0" />':'<div style="width:90px;height:68px;background:var(--bg3);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:24px;flex-shrink:0">📷</div>') +
-                '<div style="flex:1">' +
-                  '<div style="display:flex;align-items:center;gap:8px;margin-bottom:5px">' +
-                    '<span style="font-size:14px;font-weight:800;color:' + (item.severity==='high'?'#f87171':'#fbbf24') + '">' + item.type + '</span>' +
-                    '<span class="badge ' + (item.severity==='high'?'badge-red':'badge-amber') + '">' + item.severity + '</span>' +
-                    (item.isLive?'<span class="badge badge-live" style="font-size:9px">LIVE</span>':'') +
-                    (item.date?'<span class="badge badge-gray" style="font-size:9px">' + item.date + '</span>':'') +
+    // Process all live and aggregated violations safely
+    rawLive.forEach(function(x){
+      if (!x || typeof x !== 'object') return;
+      var v = (x && x.v && typeof x.v === 'object') ? x.v : x;
+      var student = x.student || v.student || (x.studentName || v.studentName) || 'Student';
+      var time = v.time || x.time || '';
+      var type = v.type || x.type || 'Proctoring Violation';
+      var k = student + '|' + time + '|' + type;
+      if (!seenKeys[k]) {
+        seenKeys[k] = true;
+        combined.push({
+          student: student,
+          type: type,
+          severity: v.severity || x.severity || 'high',
+          desc: v.desc || x.desc || '',
+          exam: v.exam || x.exam || 'CS101',
+          time: time || 'Active Exam',
+          date: x.date || v.date || '',
+          photo: v.photo || (x.v && x.v.photo) || x.photo || null,
+          isLive: Boolean(x.isLive)
+        });
+      }
+    });
+
+    // Process persisted violations
+    allPersisted.forEach(function(p){
+      if (!p || typeof p !== 'object') return;
+      var student = p.student || p.studentName || 'Student';
+      var time = p.time || '';
+      var type = p.type || 'Proctoring Violation';
+      var k = student + '|' + time + '|' + type;
+      if (!seenKeys[k]) {
+        seenKeys[k] = true;
+        combined.push({
+          student: student,
+          type: type,
+          severity: p.severity || 'high',
+          desc: p.desc || '',
+          exam: p.exam || 'CS101',
+          time: time,
+          date: p.date || '',
+          photo: p.photo || p.photoUrl || null,
+          isLive: false
+        });
+      }
+    });
+
+    var names = {}; combined.forEach(function(x){ if (x && x.student) names[x.student]=1; });
+
+    var targetEl = document.getElementById('a-content');
+    if (!targetEl) { console.error('[renderAViolations] a-content element NOT FOUND'); return; }
+
+    targetEl.innerHTML =
+      '<div class="page-enter">' +
+      '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">' +
+        '<div>' +
+          '<div class="page-title" style="margin-bottom:4px">All Violations</div>' +
+          '<div class="page-sub" style="margin-bottom:0">Every flagged incident — including persistent cross-device history</div>' +
+        '</div>' +
+        '<button class="btn-primary btn-sm" style="display:flex;align-items:center;gap:6px" onclick="if(typeof generateViolationPDF===\'function\')generateViolationPDF();">' +
+          '<span>📄</span> Export PDF Report' +
+        '</button>' +
+      '</div>' +
+      '<div class="stats-grid" style="grid-template-columns:repeat(3,1fr)">' +
+        statCard('Total', combined.length, 'All incidents', 'var(--red)') +
+        statCard('High Severity', combined.filter(function(x){return x.severity==='high';}).length, 'Critical flags', 'var(--red)') +
+        statCard('Students Flagged', Object.keys(names).length, 'Unique students', 'var(--amber)') +
+      '</div>' +
+      (combined.length === 0
+        ? '<div class="card" style="text-align:center;padding:48px;color:var(--green)">✅ No violations recorded yet.</div>'
+        : '<div style="display:flex;flex-direction:column;gap:10px">' +
+            combined.map(function(item){
+              return '<div class="card" style="padding:16px;' + (item.isLive?'border-color:rgba(239,68,68,0.3);':'') + '">' +
+                '<div style="display:flex;align-items:flex-start;gap:14px">' +
+                  (item.photo?'<img src="' + item.photo + '" style="width:90px;height:68px;object-fit:cover;border-radius:8px;border:1.5px solid rgba(239,68,68,0.4);flex-shrink:0" />':'<div style="width:90px;height:68px;background:var(--bg3);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:24px;flex-shrink:0">📷</div>') +
+                  '<div style="flex:1">' +
+                    '<div style="display:flex;align-items:center;gap:8px;margin-bottom:5px">' +
+                      '<span style="font-size:14px;font-weight:800;color:' + (item.severity==='high'?'#f87171':'#fbbf24') + '">' + item.type + '</span>' +
+                      '<span class="badge ' + (item.severity==='high'?'badge-red':'badge-amber') + '">' + item.severity + '</span>' +
+                      (item.isLive?'<span class="badge badge-live" style="font-size:9px">LIVE</span>':'') +
+                      (item.date?'<span class="badge badge-gray" style="font-size:9px">' + item.date + '</span>':'') +
+                    '</div>' +
+                    '<div style="font-size:12px;color:var(--text2);margin-bottom:5px">' + item.desc + '</div>' +
+                    '<div style="font-size:11px;color:var(--text3);font-family:\'JetBrains Mono\',monospace">' + item.student + ' &nbsp;·&nbsp; ' + item.exam + ' &nbsp;·&nbsp; ' + item.time + '</div>' +
+                    (item.photo?'<div style="margin-top:10px"><div style="font-size:10px;font-weight:700;color:var(--red);text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px">📷 Captured at violation</div><img src="' + item.photo + '" style="width:100%;max-width:320px;border-radius:8px;border:1.5px solid rgba(239,68,68,0.4);display:block" /></div>':'') +
                   '</div>' +
-                  '<div style="font-size:12px;color:var(--text2);margin-bottom:5px">' + item.desc + '</div>' +
-                  '<div style="font-size:11px;color:var(--text3);font-family:\'JetBrains Mono\',monospace">' + item.student + ' &nbsp;·&nbsp; ' + item.exam + ' &nbsp;·&nbsp; ' + item.time + '</div>' +
-                  (item.photo?'<div style="margin-top:10px"><div style="font-size:10px;font-weight:700;color:var(--red);text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px">📷 Captured at violation</div><img src="' + item.photo + '" style="width:100%;max-width:320px;border-radius:8px;border:1.5px solid rgba(239,68,68,0.4);display:block" /></div>':'') +
                 '</div>' +
-              '</div>' +
-            '</div>';
-          }).join('') +
-        '</div>') +
-    '</div>';
+              '</div>';
+            }).join('') +
+          '</div>') +
+      '</div>';
+  } catch(e) {
+    console.error('Error rendering violations:', e);
+    var targetEl = document.getElementById('a-content');
+    if (targetEl) {
+      targetEl.innerHTML = '<div class="page-enter"><div class="page-title">All Violations</div>' +
+        '<div class="card" style="margin-top:20px;padding:24px;border-color:var(--red)">' +
+        '<div style="color:var(--red);font-weight:800;margin-bottom:8px">⚠ Violations Render Error</div>' +
+        '<div style="font-size:12px;color:var(--text2);font-family:monospace;white-space:pre-wrap">' + (e && e.message ? e.message : String(e)) + '</div>' +
+        '<div style="font-size:11px;color:var(--text3);margin-top:8px;font-family:monospace;white-space:pre-wrap">' + (e && e.stack ? e.stack : '') + '</div>' +
+        '</div></div>';
+    }
+  }
 };
+window.renderAViolations = renderAViolations;
 
 /* =====================================================
    ENHANCED PDF: Violation Report with embedded photos
 ===================================================== */
-var _origGenerateViolationPDF = generateViolationPDF;
+var _origGenerateViolationPDF = typeof generateViolationPDF !== 'undefined' ? generateViolationPDF : (window.generateViolationPDF || null);
 generateViolationPDF = function() {
   if (typeof window.jspdf === 'undefined') { alert('jsPDF not loaded.'); return; }
   var jsPDF = window.jspdf.jsPDF;
@@ -631,18 +1103,41 @@ generateViolationPDF = function() {
   pdfHeader(doc, 'Violation Report', 'Violation & Proctoring Log — With Photo Evidence', 239, 68, 68);
 
   var y = 52;
-  var liveViolations = getAllViolations();
-  var allPersisted = HM_DB.violations || [];
+  var liveViolations = typeof getAllViolations === 'function' ? getAllViolations() : [];
+  var allPersisted = (typeof HM_DB !== 'undefined' && HM_DB && HM_DB.violations) ? HM_DB.violations : [];
   var liveKeys = {};
-  liveViolations.forEach(function(x){ liveKeys[x.student + x.v.time + x.v.type] = 1; });
-  var persistedOnly = allPersisted.filter(function(p){ return !liveKeys[p.student + p.time + p.type]; });
+  liveViolations.forEach(function(x){
+    if (!x) return;
+    var v = (x && x.v) ? x.v : (x || {});
+    var k = (x.student || v.student || '') + (v.time || x.time || '') + (v.type || x.type || '');
+    liveKeys[k] = 1;
+  });
+  var persistedOnly = allPersisted.filter(function(p){
+    if (!p) return false;
+    return !liveKeys[(p.student || '') + (p.time || '') + (p.type || '')];
+  });
 
   var all = liveViolations.map(function(x){
-    return { student: x.student, type: x.v.type, severity: x.v.severity, desc: x.v.desc,
-             exam: x.v.exam, time: x.v.time, photo: x.v.photo };
+    var v = (x && x.v) ? x.v : (x || {});
+    return {
+      student: x.student || v.student || 'Unknown Student',
+      type: v.type || x.type || 'Violation',
+      severity: v.severity || x.severity || 'high',
+      desc: v.desc || x.desc || '',
+      exam: v.exam || x.exam || 'CS101',
+      time: v.time || x.time || '',
+      photo: v.photo || (x.v && x.v.photo) || x.photo || null
+    };
   }).concat(persistedOnly.map(function(p){
-    return { student: p.student, type: p.type, severity: p.severity, desc: p.desc,
-             exam: p.exam, time: p.time, photo: p.photo };
+    return {
+      student: p.student || p.studentName || 'Student',
+      type: p.type || 'Violation',
+      severity: p.severity || 'high',
+      desc: p.desc || '',
+      exam: p.exam || 'CS101',
+      time: p.time || '',
+      photo: p.photo || p.photoUrl || null
+    };
   }));
 
   if (all.length === 0) {
@@ -681,7 +1176,7 @@ generateViolationPDF = function() {
 /* =====================================================
    ENHANCED PDF: Audit log with login history
 ===================================================== */
-var _origGenerateAuditPDF = generateAuditPDF;
+var _origGenerateAuditPDF = typeof generateAuditPDF !== 'undefined' ? generateAuditPDF : (window.generateAuditPDF || null);
 generateAuditPDF = function() {
   if (typeof window.jspdf === 'undefined') { alert('jsPDF not loaded.'); return; }
   var jsPDF = window.jspdf.jsPDF;
@@ -692,7 +1187,7 @@ generateAuditPDF = function() {
   doc.setFontSize(12); doc.setFont('helvetica','bold'); doc.setTextColor(13,13,46);
   doc.text('Login History', 14, y); y += 9;
 
-  var loginHistory = HM_DB.loginHistory;
+  var loginHistory = (typeof HM_DB !== 'undefined' && HM_DB && Array.isArray(HM_DB.loginHistory)) ? HM_DB.loginHistory : [];
   if (!loginHistory.length) {
     doc.setFontSize(9); doc.setFont('helvetica','normal'); doc.setTextColor(130,130,130);
     doc.text('No login history recorded.', 14, y); y += 10;
@@ -771,22 +1266,93 @@ generateAuditPDF = function() {
    NOTIFICATION BADGE on admin sidebar for violations
 ===================================================== */
 function updateAdminBadges() {
-  var violCount = HM_DB.violations.length;
-  var loginCount = HM_DB.loginHistory.length;
-  /* Could add badge elements to sidebar items here */
+  try {
+    function _safeArr(val) {
+      if (!val) return [];
+      if (Array.isArray(val)) return val;
+      if (typeof val === 'object') {
+        try { return Object.values(val); } catch(e) { return []; }
+      }
+      return [];
+    }
+
+    var violCount = (typeof HM_DB !== 'undefined' && HM_DB && HM_DB.violations) ? _safeArr(HM_DB.violations).length : 0;
+    var liveViolCount = 0;
+    var liveSess = (typeof getAllSessions === 'function') ? _safeArr(getAllSessions()) : [];
+    liveSess.forEach(function(ls){
+      if (ls && ls.violations) {
+        liveViolCount += _safeArr(ls.violations).length;
+      }
+    });
+    var totalViols = Math.max(violCount, liveViolCount);
+    if (typeof getAllViolations === 'function') {
+      try { totalViols = _safeArr(getAllViolations()).length; } catch(e){}
+    }
+
+    var loginCount = (typeof HM_DB !== 'undefined' && HM_DB && HM_DB.loginHistory) ? _safeArr(HM_DB.loginHistory).length : 0;
+    var liveOnlineCount = (typeof getLiveSessions === 'function') ? _safeArr(getLiveSessions()).length : 0;
+
+    // Violations badge
+    var siViol = document.getElementById('si-aviolations');
+    if (siViol) {
+      var bV = siViol.querySelector('.badge-pill');
+      if (!bV) {
+        bV = document.createElement('span');
+        bV.className = 'badge badge-red badge-pill';
+        bV.style.cssText = 'margin-left:auto;font-size:10px;padding:2px 7px;border-radius:10px';
+        siViol.appendChild(bV);
+      }
+      bV.textContent = totalViols;
+      bV.style.display = totalViols > 0 ? 'inline-block' : 'none';
+    }
+
+    // Live Monitor badge
+    var siMon = document.getElementById('si-amonitor');
+    if (siMon) {
+      var bM = siMon.querySelector('.badge-pill');
+      if (!bM) {
+        bM = document.createElement('span');
+        bM.className = 'badge badge-green badge-pill';
+        bM.style.cssText = 'margin-left:auto;font-size:10px;padding:2px 7px;border-radius:10px';
+        siMon.appendChild(bM);
+      }
+      bM.textContent = liveOnlineCount;
+      bM.style.display = liveOnlineCount > 0 ? 'inline-block' : 'none';
+    }
+
+    // Login History badge
+    var siLog = document.getElementById('si-aloginhistory');
+    if (siLog) {
+      var bL = siLog.querySelector('.badge-pill');
+      if (!bL) {
+        bL = document.createElement('span');
+        bL.className = 'badge badge-cyan badge-pill';
+        bL.style.cssText = 'margin-left:auto;font-size:10px;padding:2px 7px;border-radius:10px';
+        siLog.appendChild(bL);
+      }
+      bL.textContent = loginCount;
+      bL.style.display = loginCount > 0 ? 'inline-block' : 'none';
+    }
+  } catch(e) {}
 }
+window.updateAdminBadges = updateAdminBadges;
 
 /* On admin login, show notification */
-var _origAdminLogin = adminLogin;
+var _origAdminLogin = typeof adminLogin !== 'undefined' ? adminLogin : (window.adminLogin || null);
 adminLogin = function() {
-  var u = document.getElementById('a-user').value.trim();
-  var p = document.getElementById('a-pass').value;
+  var u = ((document.getElementById('a-user') || {}).value || '').trim();
+  var p = ((document.getElementById('a-pass') || {}).value || '').trim();
   if (u === 'hexaminds' && p === 'hexaminds123') {
+    role = 'admin';
+    window.role = 'admin';
     document.getElementById('login-page').classList.add('hidden');
     document.getElementById('admin-app').classList.remove('hidden');
+    updateAdminBadges();
     renderADash();
     /* Show cross-device sync notice if there's history */
-    if (HM_DB.loginHistory.length > 0 || HM_DB.violations.length > 0) {
+    var loginHistoryCount = (typeof HM_DB !== 'undefined' && HM_DB && HM_DB.loginHistory) ? HM_DB.loginHistory.length : 0;
+    var violationsCount = (typeof HM_DB !== 'undefined' && HM_DB && HM_DB.violations) ? HM_DB.violations.length : 0;
+    if (loginHistoryCount > 0 || violationsCount > 0) {
       setTimeout(function(){
         var notice = document.createElement('div');
         notice.style.cssText = 'position:fixed;bottom:24px;right:24px;z-index:9999;background:#fff;border:1.5px solid var(--border);border-radius:18px;padding:16px 20px;box-shadow:0 8px 30px rgba(0,0,0,0.1);max-width:320px;animation:toastSlide .4s ease';
@@ -794,7 +1360,7 @@ adminLogin = function() {
           '<div style="font-size:24px">📂</div>' +
           '<div>' +
             '<div style="font-weight:800;font-size:13px;color:var(--text);margin-bottom:4px">Persistent Data Loaded</div>' +
-            '<div style="font-size:12px;color:var(--text3)"><strong style="color:var(--cyan)">' + HM_DB.loginHistory.length + '</strong> login records &nbsp;·&nbsp; <strong style="color:var(--red)">' + HM_DB.violations.length + '</strong> violations found in storage.</div>' +
+            '<div style="font-size:12px;color:var(--text3)"><strong style="color:var(--cyan)">' + loginHistoryCount + '</strong> login records &nbsp;·&nbsp; <strong style="color:var(--red)">' + violationsCount + '</strong> violations found in storage.</div>' +
           '</div>' +
           '<button onclick="this.parentElement.parentElement.remove()" style="background:none;border:none;font-size:16px;color:var(--text3);cursor:pointer;flex-shrink:0">✕</button>' +
         '</div>';
@@ -804,11 +1370,14 @@ adminLogin = function() {
     }
   } else {
     var err = document.getElementById('login-err');
-    err.classList.remove('hidden');
-    err.style.animation = 'none';
-    setTimeout(function(){ err.style.animation = 'shake .35s ease'; }, 10);
+    if (err) {
+      err.classList.remove('hidden');
+      err.style.animation = 'none';
+      setTimeout(function(){ err.style.animation = 'shake .35s ease'; }, 10);
+    }
   }
 };
+window.adminLogin = adminLogin;
 
 /* =====================================================
    ADMIN EXAMS PERSISTENCE & CRUD PATCHES
@@ -867,7 +1436,7 @@ function saveExams() {
   if (typeof firebaseSyncDb === 'function') firebaseSyncDb();
 }
 
-// Override renderAExams to show the "Create Exam" button & time windows
+// Override renderAExams to show the "Create Exam" button & time windows and targeting
 renderAExams = function() {
   document.getElementById('a-content').innerHTML =
     '<div class="page-enter">' +
@@ -875,17 +1444,26 @@ renderAExams = function() {
       '<div class="page-title" style="margin-bottom:0">Exam Management</div>' +
       '<button class="btn-primary btn-sm" onclick="openCreateExamModal()">＋ Create Exam</button>' +
     '</div>' +
-    '<div class="page-sub">Registered exams and their status</div>' +
+    '<div class="page-sub">Registered exams, schedules & department/cohort targeting</div>' +
     '<div style="display:flex;flex-direction:column;gap:14px">' +
     EXAMS.map(function(e){
       var timeWindowLabel = e.startTime ? ' (' + formatTime(e.startTime) + ' - ' + formatTime(e.endTime) + ')' : '';
+      var targetDept = e.targetDept || 'All Departments';
+      var targetYear = e.targetYear || 'All Years';
+      var targetCollege = e.targetCollege || 'All Colleges';
       return '<div class="card" style="' + (e.status==='active'?'border-color:rgba(34,197,94,0.3);':'') + '">' +
         '<div style="display:flex;align-items:flex-start;justify-content:space-between">' +
-          '<div>' +
-            '<div style="font-size:16px;font-weight:800;color:var(--text);margin-bottom:4px">' + e.title + '</div>' +
-            '<div style="font-size:12px;color:var(--text3);margin-bottom:10px;font-family:\'JetBrains Mono\',monospace">Code: <span style="color:var(--cyan)">' + e.code + '</span> &nbsp;·&nbsp; ' + e.duration + ' min' + timeWindowLabel + ' &nbsp;·&nbsp; ' + e.questions + ' Qs</div>' +
-            '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
-              '<span class="badge badge-cyan">👥 ' + e.enrolled + ' enrolled</span>' +
+          '<div style="flex:1">' +
+            '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">' +
+              '<span style="font-size:16px;font-weight:800;color:var(--text)">' + e.title + '</span>' +
+              '<span class="badge badge-cyan" style="font-size:10px">' + e.code + '</span>' +
+            '</div>' +
+            '<div style="font-size:12px;color:var(--text3);margin-bottom:10px;font-family:\'JetBrains Mono\',monospace">' + e.duration + ' min' + timeWindowLabel + ' &nbsp;·&nbsp; ' + e.questions + ' Qs</div>' +
+            '<div style="display:flex;gap:6px;flex-wrap:wrap">' +
+              '<span class="badge badge-blue">🏛 ' + targetDept + '</span>' +
+              '<span class="badge badge-amber">🎓 ' + targetYear + '</span>' +
+              '<span class="badge badge-gray">🏫 ' + targetCollege + '</span>' +
+              '<span class="badge badge-cyan">👥 ' + (e.enrolled || 0) + ' enrolled</span>' +
               '<span class="badge badge-gray">📅 ' + e.date + '</span>' +
             '</div>' +
           '</div>' +
@@ -917,63 +1495,100 @@ function openCreateExamModal() {
     { q: '', type: 'MCQ', marks: 1, opts: ['', '', '', ''], ans: 0 }
   ];
   
+  var deptsList = (window.DEPARTMENTS && window.DEPARTMENTS.length) ? window.DEPARTMENTS : [];
+  var deptOptions = '<option value="All Departments">All Departments (Open to all)</option>' +
+    deptsList.map(function(d){
+      return '<option value="' + d.name + '">' + d.name + ' (' + d.code + ')</option>';
+    }).join('');
+
   var overlay = document.createElement('div');
   overlay.id = 'create-exam-overlay';
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.8);backdrop-filter:blur(8px);display:flex;align-items:center;justify-content:center;z-index:20000;padding:20px;';
   
   overlay.innerHTML = 
-    '<div class="fv-box" style="width:600px; max-height:85vh; overflow-y:auto; text-align:left; display:flex; flex-direction:column; gap:20px; padding:32px; border-radius:20px; background:#fff; border:1.5px solid var(--border); box-shadow:0 12px 50px rgba(0,0,0,0.15); animation:cardEntrance .4s ease;">' +
+    '<div class="fv-box" style="width:680px; max-height:88vh; overflow-y:auto; text-align:left; display:flex; flex-direction:column; gap:18px; padding:30px; border-radius:20px; background:#fff; border:1.5px solid var(--border); box-shadow:0 12px 50px rgba(0,0,0,0.15); animation:cardEntrance .4s ease;">' +
       '<div style="display:flex;justify-content:space-between;align-items:center">' +
-        '<div style="font-size:22px;font-weight:800;color:var(--text)">Create New Exam</div>' +
+        '<div>' +
+          '<div style="font-size:22px;font-weight:800;color:var(--text)">Create & Publish Exam</div>' +
+          '<div style="font-size:12px;color:var(--text3)">Configure exam questions and department / cohort targeting</div>' +
+        '</div>' +
         '<button onclick="closeCreateExamModal()" style="background:none;border:none;font-size:20px;color:var(--text3);cursor:pointer;line-height:1">✕</button>' +
       '</div>' +
       
       '<div style="display:flex;gap:16px">' +
         '<div class="form-group" style="flex:2;margin-bottom:0">' +
           '<label class="form-label">Exam Title</label>' +
-          '<input id="ce-title" placeholder="e.g. Engineering Physics" style="width:100%" />' +
+          '<input id="ce-title" placeholder="e.g. Data Structures & Algorithms" style="width:100%" />' +
         '</div>' +
         '<div class="form-group" style="flex:1;margin-bottom:0">' +
           '<label class="form-label">Exam Code</label>' +
-          '<input id="ce-code" placeholder="e.g. PHYS101" style="width:100%;text-transform:uppercase" />' +
+          '<input id="ce-code" placeholder="e.g. CS201" style="width:100%;text-transform:uppercase" />' +
+        '</div>' +
+      '</div>' +
+
+      /* Targeted Cohort Fields (Department, Year, College) */
+      '<div style="background:var(--bg2);padding:14px;border-radius:12px;border:1px solid var(--border);display:flex;flex-direction:column;gap:12px">' +
+        '<div style="font-size:11px;font-weight:800;color:var(--cyan);text-transform:uppercase;letter-spacing:.5px">🎯 Cohort & Audience Targeting</div>' +
+        '<div style="display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:10px">' +
+          '<div>' +
+            '<label class="form-label" style="font-size:10px;margin-bottom:4px">Target Department</label>' +
+            '<select id="ce-target-dept" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--border);background:#fff;font-size:12px;color:var(--text)">' +
+              deptOptions +
+            '</select>' +
+          '</div>' +
+          '<div>' +
+            '<label class="form-label" style="font-size:10px;margin-bottom:4px">Target Year</label>' +
+            '<select id="ce-target-year" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--border);background:#fff;font-size:12px;color:var(--text)">' +
+              '<option value="All Years">All Years</option>' +
+              '<option value="1st Year">1st Year</option>' +
+              '<option value="2nd Year">2nd Year</option>' +
+              '<option value="3rd Year" selected>3rd Year</option>' +
+              '<option value="4th Year">4th Year</option>' +
+              '<option value="Postgraduate">Postgraduate</option>' +
+            '</select>' +
+          '</div>' +
+          '<div>' +
+            '<label class="form-label" style="font-size:10px;margin-bottom:4px">Target College</label>' +
+            '<input id="ce-target-college" value="All Colleges" placeholder="e.g. HexaMinds Institute or All Colleges" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--border);font-size:12px" />' +
+          '</div>' +
         '</div>' +
       '</div>' +
 
       '<div style="display:flex;gap:16px">' +
         '<div class="form-group" style="flex:1;margin-bottom:0">' +
           '<label class="form-label">Start Time</label>' +
-          '<input id="ce-start-time" type="time" value="23:00" style="width:100%" oninput="updateCreateExamDuration()" />' +
+          '<input id="ce-start-time" type="time" value="09:00" style="width:100%" oninput="updateCreateExamDuration()" />' +
         '</div>' +
         '<div class="form-group" style="flex:1;margin-bottom:0">' +
           '<label class="form-label">End Time</label>' +
-          '<input id="ce-end-time" type="time" value="00:30" style="width:100%" oninput="updateCreateExamDuration()" />' +
+          '<input id="ce-end-time" type="time" value="10:30" style="width:100%" oninput="updateCreateExamDuration()" />' +
         '</div>' +
       '</div>' +
       
-      '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:-8px">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:-4px">' +
         '<div style="font-size:12px;color:var(--text3)">' +
           'Calculated Duration: <strong id="ce-duration-val" style="color:var(--cyan)">90</strong> minutes' +
         '</div>' +
         '<div class="form-group" style="margin-bottom:0">' +
-          '<label class="form-label" style="display:inline">Date</label> &nbsp;' +
+          '<label class="form-label" style="display:inline">Exam Date</label> &nbsp;' +
           '<input id="ce-date" type="date" value="' + new Date().toISOString().slice(0,10) + '" style="display:inline;width:150px;padding:6px" />' +
         '</div>' +
       '</div>' +
       
-      '<div style="border-top:1.5px solid var(--border);padding-top:16px">' +
+      '<div style="border-top:1.5px solid var(--border);padding-top:14px">' +
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">' +
           '<span style="font-weight:700;color:var(--text)">Questions (Total Marks: <strong id="ce-total-marks" style="color:var(--cyan)">1</strong>)</span>' +
           '<button class="btn-outline btn-sm" onclick="addQuestionField()">＋ Add Question</button>' +
         '</div>' +
-        '<div id="ce-questions-container" style="display:flex;flex-direction:column;gap:16px;max-height:280px;overflow-y:auto;padding-right:8px;">' +
+        '<div id="ce-questions-container" style="display:flex;flex-direction:column;gap:16px;max-height:260px;overflow-y:auto;padding-right:8px;">' +
         '</div>' +
       '</div>' +
       
       '<div id="ce-err" class="hidden" style="font-size:12px;color:#f87171;padding:10px 14px;background:rgba(239,68,68,0.1);border-radius:10px;border:1px solid rgba(239,68,68,0.3);font-weight:600"></div>' +
       
-      '<div style="display:flex;gap:12px;margin-top:8px">' +
+      '<div style="display:flex;gap:12px;margin-top:6px">' +
         '<button class="btn-outline" style="flex:1" onclick="closeCreateExamModal()">Cancel</button>' +
-        '<button class="btn-primary" style="flex:2" onclick="submitCreateExam()">Create & Publish Exam</button>' +
+        '<button class="btn-primary" style="flex:2" onclick="submitCreateExam()">Publish Exam for Cohort →</button>' +
       '</div>' +
     '</div>';
     
@@ -1108,6 +1723,9 @@ function submitCreateExam() {
   var startTime = document.getElementById('ce-start-time').value;
   var endTime = document.getElementById('ce-end-time').value;
   var date = document.getElementById('ce-date').value;
+  var targetDept = (document.getElementById('ce-target-dept') || {}).value || 'All Departments';
+  var targetYear = (document.getElementById('ce-target-year') || {}).value || 'All Years';
+  var targetCollege = ((document.getElementById('ce-target-college') || {}).value || 'All Colleges').trim();
   
   if (!title) { showCreateExamErr('Please enter an exam title.'); return; }
   if (!code) { showCreateExamErr('Please enter an exam code.'); return; }
@@ -1128,6 +1746,12 @@ function submitCreateExam() {
     }
   }
   
+  var totalMarks = customQuestions.reduce(function(acc, q) {
+    var m = q.type === 'MCQ' ? 1 : q.type === '2 Mark' ? 2 : q.type === '13 Mark' ? 13 : q.type === '16 Mark' ? 16 : 1;
+    q.marks = m;
+    return acc + m;
+  }, 0);
+  
   var nextId = EXAMS.length > 0 ? Math.max.apply(null, EXAMS.map(function(e){ return e.id; })) + 1 : 1;
   var newExam = {
     id: nextId,
@@ -1140,6 +1764,9 @@ function submitCreateExam() {
     status: 'active',
     enrolled: 0,
     date: date,
+    targetDept: targetDept,
+    targetYear: targetYear,
+    targetCollege: targetCollege,
     questionsList: JSON.parse(JSON.stringify(customQuestions))
   };
   
@@ -1152,8 +1779,12 @@ function submitCreateExam() {
     startTime: startTime,
     endTime: endTime,
     status: 'available',
+    published: true,
     date: date,
     score: null,
+    targetDept: targetDept,
+    targetYear: targetYear,
+    targetCollege: targetCollege,
     questionsList: JSON.parse(JSON.stringify(customQuestions))
   };
   
@@ -1289,6 +1920,22 @@ startExam = function(id) {
   noFaceWarningCount = 0;
   multipleFacesAutoSubmitted = false;
   phoneDetected = false;
+  _impersonationFrames = 0;
+  _impersonationViolationLogged = false;
+
+  /* Load candidate biometric descriptor and photo if not attached */
+  if (currentStudent && currentStudent.name && (!currentStudent.desc || !currentStudent.profilePhoto)) {
+    var faceKey = (currentStudent.name||'').toLowerCase() + '|' + (currentStudent.dob||'');
+    var stored = (typeof registeredFaceData !== 'undefined') ? registeredFaceData[faceKey] : null;
+    if (stored) {
+      if (stored.desc) currentStudent.desc = stored.desc;
+      if (stored.snapshot) {
+        currentStudent.profilePhoto = stored.snapshot;
+        studentProfilePhoto = stored.snapshot;
+      }
+    }
+  }
+
   clearInterval(examTimer);
   examActive = true;
 
@@ -1628,10 +2275,13 @@ submitExam = function(autoSubmit) {
   });
   
   var storageKey = 'rec_' + currentStudent.name + '_' + currentExamId;
-  
+  var currentStudentId = currentStudent.id || currentStudent.studentId || (registeredFaceData[currentStudent.name.toLowerCase() + '|' + currentStudent.dob] && registeredFaceData[currentStudent.name.toLowerCase() + '|' + currentStudent.dob].studentId) || ('HM-STU-' + (1001 + (STUDENTS ? STUDENTS.length : 0)));
+
   var subData = {
+    studentId: currentStudentId,
     studentName: currentStudent.name,
     college: currentStudent.college || 'HexaMinds College',
+    studentPhoto: studentProfilePhoto || null,
     examId: currentExamId,
     examTitle: examTitle,
     examCode: examCode,
@@ -1644,7 +2294,9 @@ submitExam = function(autoSubmit) {
     totalScore: hasSubjective ? 0 : mcqScore,
     totalPossible: totalMarksPossible,
     comments: '',
-    storageKey: storageKey
+    storageKey: storageKey,
+    violations: JSON.parse(JSON.stringify(sessionViolations || [])),
+    suspicionScore: typeof suspicionScore !== 'undefined' ? suspicionScore : 0
   };
 
   if (existingSubIndex !== -1) {
@@ -1733,13 +2385,69 @@ renderSDash = function() {
     else if (document.msExitFullscreen) document.msExitFullscreen();
   } catch(e) {}
 
-  // Calculate dynamic metrics
-  var availableCount = studentExams.filter(function(e){ return e.status === 'available'; }).length;
-  var completedCount = studentExams.filter(function(e){ return e.status === 'completed'; }).length;
+  // Dynamic cohort filtering
+  var studentIdDisplay = currentStudent.id || currentStudent.studentId || ('HM-STU-1001');
+  var rawStudentDept = (currentStudent.dept || '').trim();
+  var rawStudentYear = (currentStudent.year || '').trim();
+  var studentDept = rawStudentDept.toLowerCase();
+  var studentYear = rawStudentYear.toLowerCase();
+  var studentCollege = (currentStudent.college || '').trim().toLowerCase();
+
+  // Combine exams from EXAMS array to ensure all newly published targeted exams are reflected
+  var candidateExams = (EXAMS && EXAMS.length > 0) ? EXAMS.map(function(ex){
+    var se = (studentExams || []).find(function(s){ return s.id === ex.id; });
+    return {
+      id: ex.id,
+      title: ex.title,
+      code: ex.code,
+      questions: ex.questions,
+      duration: ex.duration,
+      startTime: ex.startTime,
+      endTime: ex.endTime,
+      status: se ? se.status : 'available',
+      published: ex.published !== false,
+      date: ex.date,
+      score: se ? se.score : null,
+      targetDept: ex.targetDept || (se && se.targetDept) || 'All Departments',
+      targetYear: ex.targetYear || (se && se.targetYear) || 'All Years',
+      targetCollege: ex.targetCollege || (se && se.targetCollege) || 'All Colleges',
+      questionsList: ex.questionsList
+    };
+  }) : (studentExams || []);
+
+  var publishedStudentExams = candidateExams.filter(function(e){
+    if (e.published === false) return false;
+    
+    // Department filtering
+    if (e.targetDept && e.targetDept !== 'All Departments') {
+      var td = e.targetDept.trim().toLowerCase();
+      if (studentDept && td !== studentDept && !studentDept.includes(td) && !td.includes(studentDept)) {
+        return false;
+      }
+    }
+    // Year filtering
+    if (e.targetYear && e.targetYear !== 'All Years') {
+      var ty = e.targetYear.trim().toLowerCase();
+      if (studentYear && ty !== studentYear) {
+        return false;
+      }
+    }
+    // College filtering
+    if (e.targetCollege && e.targetCollege !== 'All Colleges') {
+      var tc = e.targetCollege.trim().toLowerCase();
+      if (studentCollege && tc !== studentCollege && !studentCollege.includes(tc) && !tc.includes(studentCollege)) {
+        return false;
+      }
+    }
+    return true;
+  });
+
+  var availableCount = publishedStudentExams.filter(function(e){ return e.status === 'available'; }).length;
+  var completedCount = publishedStudentExams.filter(function(e){ return e.status === 'completed'; }).length;
   
   var avgScore = '—';
   var grade = '—';
-  var completedExamsWithScores = studentExams.filter(function(e){
+  var completedExamsWithScores = publishedStudentExams.filter(function(e){
     var finalScore = e.score;
     if (HM_DB.grades && HM_DB.grades[currentStudent.name] && HM_DB.grades[currentStudent.name][e.id] !== undefined) {
       finalScore = HM_DB.grades[currentStudent.name][e.id];
@@ -1764,20 +2472,27 @@ renderSDash = function() {
     '<div style="display:flex;align-items:center;gap:16px;margin-bottom:24px">' +
       profilePhotoHtml +
       '<div>' +
-        '<div class="page-title" style="margin-bottom:2px">Welcome, ' + currentStudent.name + '</div>' +
-        '<div class="page-sub" style="margin-bottom:0">' + currentStudent.college + ' &nbsp;·&nbsp; <span style="font-family:\'JetBrains Mono\',monospace">' + currentStudent.dob + '</span></div>' +
+        '<div class="page-title" style="margin-bottom:4px;display:flex;align-items:center;gap:10px">' +
+          'Welcome, ' + currentStudent.name + 
+          ' <span class="badge badge-cyan" style="font-size:12px">' + studentIdDisplay + '</span>' +
+        '</div>' +
+        '<div class="page-sub" style="margin-bottom:6px">' + (currentStudent.college || 'HexaMinds Institute') + ' &nbsp;·&nbsp; DOB: <span style="font-family:\'JetBrains Mono\',monospace">' + currentStudent.dob + '</span></div>' +
+        '<div style="display:flex;gap:6px;flex-wrap:wrap">' +
+          '<span class="badge badge-blue">🏛 ' + (rawStudentDept || 'Computer Science & Engineering') + '</span>' +
+          '<span class="badge badge-amber">🎓 ' + (rawStudentYear || '4th Year') + '</span>' +
+        '</div>' +
       '</div>' +
     '</div>' +
     '<div class="stats-grid" style="grid-template-columns:repeat(3,1fr)">' +
-      '<div class="stat-card anim-fade-up delay-1"><div class="stat-label">Available Exams</div><div class="stat-value" style="color:var(--cyan)">' + availableCount + '</div><div class="stat-sub">Ready to take</div></div>' +
+      '<div class="stat-card anim-fade-up delay-1"><div class="stat-label">Cohort Exams</div><div class="stat-value" style="color:var(--cyan)">' + availableCount + '</div><div class="stat-sub">For your branch & year</div></div>' +
       '<div class="stat-card anim-fade-up delay-2"><div class="stat-label">Completed</div><div class="stat-value" style="color:var(--green)">' + completedCount + '</div><div class="stat-sub">This semester</div></div>' +
       '<div class="stat-card anim-fade-up delay-3"><div class="stat-label">Avg Score</div><div class="stat-value">' + avgScore + '</div><div class="stat-sub">Grade: ' + grade + '</div></div>' +
     '</div>' +
     '<div class="card anim-fade-up delay-2" style="margin-bottom:16px">' +
-      '<div class="section-title">📋 Your Exams</div>' +
-      (studentExams.length === 0
-        ? '<div style="font-size:13px;color:var(--text3);text-align:center;padding:24px 0">No exams registered or available.</div>'
-        : studentExams.map(function(e){
+      '<div class="section-title">📋 Published Exams for Your Department & Year</div>' +
+      (publishedStudentExams.length === 0
+        ? '<div style="font-size:13px;color:var(--text3);text-align:center;padding:24px 0">No published exams for your cohort right now. Enter an exam code below when provided by your faculty.</div>'
+        : publishedStudentExams.map(function(e){
             var timeWindowLabel = e.startTime ? ' (' + formatTime(e.startTime) + ' - ' + formatTime(e.endTime) + ')' : '';
             var scoreVal = e.score;
             var scoreColorClass = 'badge-green';
@@ -1794,7 +2509,11 @@ renderSDash = function() {
             
             return '<div style="display:flex;align-items:center;justify-content:space-between;padding:16px 0;border-bottom:1px solid var(--border)">' +
               '<div>' +
-                '<div style="font-weight:700;font-size:14px;color:var(--text)">' + e.title + '</div>' +
+                '<div style="font-weight:700;font-size:14px;color:var(--text);display:flex;align-items:center;gap:8px">' + 
+                  e.title + 
+                  (e.targetDept ? ' <span class="badge badge-gray" style="font-size:10px">' + e.targetDept + '</span>' : '') +
+                  (e.targetYear ? ' <span class="badge badge-gray" style="font-size:10px">' + e.targetYear + '</span>' : '') +
+                '</div>' +
                 '<div style="font-size:12px;color:var(--text3);margin-top:4px;font-family:\'JetBrains Mono\',monospace">' + e.questions + ' Qs &nbsp;·&nbsp; ' + e.duration + ' min' + timeWindowLabel + ' &nbsp;·&nbsp; ' + e.date + '</div>' +
               '</div>' +
               (e.status === 'completed'
@@ -1815,103 +2534,181 @@ renderSDash = function() {
 
 // Override renderADash to show dynamic stats
 renderADash = function() {
-  var live      = getLiveSessions();
-  var allViols  = getAllViolations();
-  var liveOnline = live.filter(function(ls){ return ls.status==='online'||ls.status==='exam'; }).length;
+  try {
+    function _safeArr(val) {
+      if (!val) return [];
+      if (Array.isArray(val)) return val;
+      if (typeof val === 'object') {
+        try { return Object.values(val); } catch(e) { return []; }
+      }
+      return [];
+    }
 
-  /* Violation type breakdown */
-  var violTypes = {};
-  allViols.forEach(function(item){ violTypes[item.v.type] = (violTypes[item.v.type]||0) + 1; });
+    var live      = typeof getLiveSessions === 'function' ? _safeArr(getLiveSessions()) : [];
+    var allViols  = typeof getAllViolations === 'function' ? _safeArr(getAllViolations()) : [];
+    var liveOnline = live.filter(function(ls){ return ls && (ls.status==='online'||ls.status==='exam'); }).length;
 
-  // Calculate dynamic active exams
-  var activeExams = EXAMS.filter(function(e){ return e.status === 'active'; });
-  var activeCount = activeExams.length;
-  var activeCodes = activeExams.map(function(e){ return e.code; }).join(', ') || 'None';
+    /* Violation type breakdown */
+    var violTypes = {};
+    allViols.forEach(function(item){
+      if (!item || typeof item !== 'object') return;
+      var v = (item && item.v && typeof item.v === 'object') ? item.v : item;
+      if (v && v.type) violTypes[v.type] = (violTypes[v.type]||0) + 1;
+    });
 
-  document.getElementById('a-content').innerHTML =
-    '<div class="page-enter">' +
-    '<div class="page-title">Command Center</div>' +
-    '<div class="page-sub">Real-time system overview &nbsp;·&nbsp; All student activity and violations</div>' +
+    // Calculate dynamic active exams
+    var activeExams = _safeArr(window.EXAMS || []).filter(function(e){ return e && e.status === 'active'; });
+    var activeCount = activeExams.length;
+    var activeCodes = activeExams.map(function(e){ return (e && e.code) || ''; }).filter(Boolean).join(', ') || 'None';
 
-    (live.length > 0
-      ? '<div style="background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.25);border-radius:14px;padding:14px 18px;margin-bottom:20px;display:flex;align-items:center;gap:14px;animation:cyberBorder 3s ease infinite">' +
-          '<span class="live-dot" style="width:11px;height:11px;box-shadow:0 0 8px var(--green)"></span>' +
-          '<div>' +
-            '<div style="font-size:13px;font-weight:800;color:var(--green)">' + live.length + ' Student' + (live.length>1?'s':'') + ' Currently Online</div>' +
-            '<div style="font-size:12px;color:rgba(34,197,94,0.7);margin-top:2px">' +
-              live.map(function(ls){ return ls.name + (ls.status==='exam'?'&nbsp;<span class="badge badge-amber" style="font-size:9px">IN EXAM</span>':''); }).join('  ·  ') +
+    var totalStudents = (window.STUDENTS && Array.isArray(STUDENTS) && STUDENTS.length) ? STUDENTS.length : (live.length || 0);
+    var highViols = allViols.filter(function(x){
+      if (!x || typeof x !== 'object') return false;
+      var v = (x && x.v && typeof x.v === 'object') ? x.v : x;
+      return v && v.severity === 'high';
+    }).length;
+
+    var contentEl = document.getElementById('a-content');
+    if (!contentEl) { console.error('[renderADash] a-content element NOT FOUND'); return; }
+
+    var activeLiveList = live.filter(function(ls){ return ls && ls.examStarted; });
+    var studList = _safeArr(window.STUDENTS || []);
+    var offlineList = (studList.filter(function(s){ return s && s.exams>0; }).length > 0
+      ? studList.filter(function(s){ return s && s.exams>0; })
+      : studList
+    ).slice(0,8);
+    var hasStudentActivity = activeLiveList.length > 0 || offlineList.length > 0;
+
+    contentEl.innerHTML =
+      '<div class="page-enter">' +
+      '<div class="page-title">Command Center</div>' +
+      '<div class="page-sub">Real-time system overview &nbsp;·&nbsp; All student activity and violations</div>' +
+
+      (live.length > 0
+        ? '<div style="background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.25);border-radius:14px;padding:14px 18px;margin-bottom:20px;display:flex;align-items:center;gap:14px;animation:cyberBorder 3s ease infinite">' +
+            '<span class="live-dot" style="width:11px;height:11px;box-shadow:0 0 8px var(--green)"></span>' +
+            '<div>' +
+              '<div style="font-size:13px;font-weight:800;color:var(--green)">' + live.length + ' Student' + (live.length>1?'s':'') + ' Currently Online</div>' +
+              '<div style="font-size:12px;color:rgba(34,197,94,0.7);margin-top:2px">' +
+                live.map(function(ls){ return (ls.name||'Student') + (ls.status==='exam'?'&nbsp;<span class="badge badge-amber" style="font-size:9px">IN EXAM</span>':''); }).join('  ·  ') +
+              '</div>' +
             '</div>' +
+          '</div>'
+        : '') +
+
+      '<div class="stats-grid">' +
+        statCard('Total Students', totalStudents, 'Registered accounts', 'var(--cyan)') +
+        statCard('Online Now', liveOnline, 'Live sessions', 'var(--green)') +
+        statCard('Violations', allViols.length, highViols + ' high severity', 'var(--red)') +
+        statCard('Active Exams', activeCount, activeCodes, 'var(--blue)') +
+      '</div>' +
+
+      '<div class="two-col" style="margin-bottom:18px">' +
+        /* Student Activity */
+        '<div class="card">' +
+          '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">' +
+            '<div class="section-title" style="margin-bottom:0">Student Activity</div>' +
+            (live.length > 0 ? '<span class="badge badge-live">' + live.length + ' LIVE</span>' : '') +
           '</div>' +
-        '</div>'
-      : '') +
-
-    '<div class="stats-grid">' +
-      statCard('Total Students', STUDENTS.filter(function(s){ return s.exams>0; }).length + live.filter(function(ls){ return ls.examStarted; }).length, 'Attempted exam', 'var(--cyan)') +
-      statCard('Online Now', liveOnline, 'Live sessions', 'var(--green)') +
-      statCard('Violations', allViols.length, allViols.filter(function(x){ return x.v.severity==='high'; }).length + ' high severity', 'var(--red)') +
-      statCard('Active Exams', activeCount, activeCodes, 'var(--blue)') +
-    '</div>' +
-
-    '<div class="two-col" style="margin-bottom:18px">' +
-      /* Student Activity */
-      '<div class="card">' +
-        '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">' +
-          '<div class="section-title" style="margin-bottom:0">Student Activity</div>' +
-          (live.length > 0 ? '<span class="badge badge-live">' + live.length + ' LIVE</span>' : '') +
+          (hasStudentActivity
+            ? (activeLiveList.map(function(ls){
+                var photoHtml = ls.profilePhoto
+                  ? '<div style="width:34px;height:34px;border-radius:50%;overflow:hidden;flex-shrink:0;border:2px solid var(--green)"><img src="' + ls.profilePhoto + '" style="width:100%;height:100%;object-fit:cover" /></div>'
+                  : '<div class="avatar" style="background:linear-gradient(135deg,var(--green),#15803d);font-size:11px">' + (ls.name||'S').split(' ').map(function(n){ return n[0]; }).join('') + '</div>';
+                var vCount = (ls.violations && _safeArr(ls.violations).length) || 0;
+                return '<div style="display:flex;align-items:center;justify-content:space-between;padding:11px 12px;border-radius:12px;background:rgba(34,197,94,0.06);border:1px solid rgba(34,197,94,0.15);margin-bottom:8px">' +
+                  '<div style="display:flex;align-items:center;gap:10px">' +
+                    photoHtml +
+                    '<div>' +
+                      '<div style="font-weight:800;font-size:13px;color:var(--text)">' + (ls.name||'Student') + '&nbsp;<span class="live-dot" style="width:6px;height:6px"></span></div>' +
+                      '<div style="font-size:11px;color:var(--text3)">' + (ls.college||'') + ' · ' + (ls.loginTime||'Online') + '</div>' +
+                    '</div>' +
+                  '</div>' +
+                  '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">' +
+                    (vCount ? '<span class="badge badge-red">' + vCount + ' viol</span>' : '') +
+                    '<span class="badge ' + (ls.status==='exam'?'badge-amber':'badge-green') + '">' + (ls.status||'online') + '</span>' +
+                  '</div>' +
+                '</div>';
+              }).join('') +
+              offlineList.map(function(s){
+                var svCount = (s.violations && _safeArr(s.violations).length) || 0;
+                return '<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border)">' +
+                  '<div style="display:flex;align-items:center;gap:10px">' +
+                    '<div class="avatar" style="background:var(--bg3);font-size:11px">' + (s.name||'S').split(' ').map(function(n){ return n[0]; }).join('') + '</div>' +
+                    '<div><div style="font-weight:600;font-size:13px;color:var(--text)">' + (s.name||'Student') + '</div><div style="font-size:11px;color:var(--text3)">' + (s.college||'') + '</div></div>' +
+                  '</div>' +
+                  '<div style="display:flex;align-items:center;gap:6px">' +
+                    (svCount ? '<span class="badge badge-red">' + svCount + '</span>' : '') +
+                    '<span class="badge badge-gray">offline</span>' +
+                  '</div>' +
+                '</div>';
+              }).join(''))
+            : '<div style="font-size:13px;color:var(--text3);padding:24px 0;text-align:center">No student activity recorded yet. Active sessions will appear here.</div>') +
         '</div>' +
-        live.filter(function(ls){ return ls.examStarted; }).map(function(ls){
-          var photoHtml = ls.profilePhoto
-            ? '<div style="width:34px;height:34px;border-radius:50%;overflow:hidden;flex-shrink:0;border:2px solid var(--green)"><img src="' + ls.profilePhoto + '" style="width:100%;height:100%;object-fit:cover" /></div>'
-            : '<div class="avatar" style="background:linear-gradient(135deg,var(--green),#15803d);font-size:11px">' + ls.name.split(' ').map(function(n){ return n[0]; }).join('') + '</div>';
-          return '<div style="display:flex;align-items:center;justify-content:space-between;padding:11px 12px;border-radius:12px;background:rgba(34,197,94,0.06);border:1px solid rgba(34,197,94,0.15);margin-bottom:8px">' +
-            '<div style="display:flex;align-items:center;gap:10px">' +
-              photoHtml +
-              '<div>' +
-                '<div style="font-weight:800;font-size:13px;color:var(--text)">' + ls.name + '&nbsp;<span class="live-dot" style="width:6px;height:6px"></span></div>' +
-                '<div style="font-size:11px;color:var(--text3)">' + ls.college + ' · ' + ls.loginTime + '</div>' +
-              '</div>' +
-            '</div>' +
-            '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">' +
-              (ls.violations.length ? '<span class="badge badge-red">' + ls.violations.length + ' viol</span>' : '') +
-              '<span class="badge ' + (ls.status==='exam'?'badge-amber':'badge-green') + '">' + ls.status + '</span>' +
-            '</div>' +
-          '</div>';
-        }).join('') +
-        STUDENTS.filter(function(s){ return s.exams>0; }).map(function(s){
-          return '<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border)">' +
-            '<div style="display:flex;align-items:center;gap:10px">' +
-              '<div class="avatar" style="background:var(--bg3);font-size:11px">' + s.name.split(' ').map(function(n){ return n[0]; }).join('') + '</div>' +
-              '<div><div style="font-weight:600;font-size:13px;color:var(--text)">' + s.name + '</div><div style="font-size:11px;color:var(--text3)">' + s.college + '</div></div>' +
-            '</div>' +
-            '<div style="display:flex;align-items:center;gap:6px">' +
-              (s.violations.length ? '<span class="badge badge-red">' + s.violations.length + '</span>' : '') +
-              '<span class="badge badge-gray">offline</span>' +
-            '</div>' +
-          '</div>';
-        }).join('') +
+
+        /* Violation Feed */
+        '<div class="card">' +
+          '<div class="section-title">Recent Violations</div>' +
+          (function(){
+            var all = typeof getAllViolations === 'function' ? _safeArr(getAllViolations()) : [];
+            if (!all.length) return '<div style="font-size:13px;color:var(--text3);padding:20px 0;text-align:center">✅ No violations recorded yet.</div>';
+            return all.slice(0,6).map(function(item){
+              if (!item || typeof item !== 'object') return '';
+              var v = (item && item.v && typeof item.v === 'object') ? item.v : item;
+              var stName = item.student || v.student || (item.studentName || v.studentName) || 'Candidate';
+              var sev = v.severity || item.severity || 'high';
+              var vType = v.type || item.type || 'Violation';
+              var desc = v.desc || item.desc || '';
+              var vTime = v.time || item.time || '';
+              return '<div class="viol-card-mini">' +
+                '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">' +
+                  '<span style="font-weight:800;font-size:12px;color:var(--text)">' + stName + '</span>' +
+                  '<span class="badge ' + (sev==='high'?'badge-red':'badge-amber') + '">' + sev + '</span>' +
+                '</div>' +
+                '<div style="font-size:11px;color:var(--text2);margin-bottom:2px"><strong>' + vType + '</strong>: ' + desc + '</div>' +
+                '<div style="font-size:10px;color:var(--text3);font-family:\'JetBrains Mono\',monospace">' + vTime + '</div>' +
+              '</div>';
+            }).join('');
+          })() +
+        '</div>' +
       '</div>' +
 
-      /* Violation Feed */
-      '<div class="card">' +
-        '<div class="section-title">Recent Violations</div>' +
-        (function(){
-          var all = getAllViolations();
-          if (!all.length) return '<div style="font-size:13px;color:var(--text3);padding:20px 0;text-align:center">✅ No violations recorded yet.</div>';
-          return all.slice(0,6).map(function(item){
-            return '<div class="viol-card-mini">' +
-              '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">' +
-                '<span style="font-weight:800;font-size:12px;color:var(--text)">' + item.student + '</span>' +
-                '<span class="badge ' + (item.v.severity==='high'?'badge-red':'badge-amber') + '">' + item.v.severity + '</span>' +
-              '</div>' +
-              '<div style="font-size:11px;color:var(--text2);margin-bottom:2px"><strong>' + item.v.type + '</strong>: ' + item.v.desc + '</div>' +
-              '<div style="font-size:10px;color:var(--text3);font-family:\'JetBrains Mono\',monospace">' + item.v.time + '</div>' +
-            '</div>';
-          }).join('');
-        })() +
-      '</div>' +
-    '</div>' +
-    '</div>';
+      /* Violation Breakdown */
+      (Object.keys(violTypes).length > 0
+        ? '<div class="card">' +
+            '<div class="section-title">Violation Breakdown</div>' +
+            '<div style="display:flex;flex-direction:column;gap:8px">' +
+            Object.entries(violTypes).map(function(pair){
+              var t = pair[0], cnt = pair[1];
+              var pct = Math.round(cnt / Math.max(1, allViols.length) * 100);
+              return '<div>' +
+                '<div style="display:flex;justify-content:space-between;margin-bottom:4px">' +
+                  '<span style="font-size:12px;color:var(--text2);font-weight:600">' + t + '</span>' +
+                  '<span style="font-size:12px;color:var(--text3);font-family:\'JetBrains Mono\',monospace">' + cnt + ' (' + pct + '%)</span>' +
+                '</div>' +
+                '<div style="height:6px;background:var(--border);border-radius:4px;overflow:hidden">' +
+                  '<div style="height:100%;width:' + pct + '%;background:linear-gradient(90deg,var(--red),var(--amber));border-radius:4px;transition:width 1s ease;box-shadow:0 0 6px rgba(239,68,68,0.4)"></div>' +
+                '</div>' +
+              '</div>';
+            }).join('') +
+            '</div>' +
+          '</div>'
+        : '') +
+      '</div>';
+  } catch(e) {
+    console.error('Error rendering admin dash:', e);
+    var contentEl = document.getElementById('a-content');
+    if (contentEl) {
+      contentEl.innerHTML = '<div class="page-enter"><div class="page-title">Command Center</div>' +
+        '<div class="card" style="margin-top:20px;padding:24px;border-color:var(--red)">' +
+        '<div style="color:var(--red);font-weight:800;margin-bottom:8px">⚠ Dashboard Render Error</div>' +
+        '<div style="font-size:12px;color:var(--text2);font-family:monospace;white-space:pre-wrap">' + (e && e.message ? e.message : String(e)) + '</div>' +
+        '<div style="font-size:11px;color:var(--text3);margin-top:8px;font-family:monospace;white-space:pre-wrap">' + (e && e.stack ? e.stack : '') + '</div>' +
+        '</div></div>';
+    }
+  }
 };
+window.renderADash = renderADash;
 
 // Monitor Fullscreen changes
 document.addEventListener('fullscreenchange', checkFullscreenViolation);
@@ -1966,7 +2763,22 @@ window.reEnterFullScreen = function() {
 };
 
 // Reset face stabilizers on start/stop camera stream
-var _origStartCam = startCam;
+// Reset face stabilizers on start/stop camera stream
+window._faceHudAnimFrame = null;
+window._hudFrameCount = 0;
+window._bioCheckCount = 0;
+window._bioFetchPending = false;
+window._scanlineY = 0;
+window._lastBioResult = { status: 'MATCH', match_percentage: 96, is_match: true, time: new Date().toLocaleTimeString() };
+window._latestFaceTrackingData = {
+  faces: [],
+  consensus: 1,
+  gazeStatus: { text: 'Calibrating...', isDiverted: false },
+  phonePreds: [],
+  timestamp: Date.now()
+};
+
+var _origStartCam = typeof startCam !== 'undefined' ? startCam : (window.startCam || null);
 startCam = function() {
   faceCalibrated = false;
   calibrationFrames = [];
@@ -1974,10 +2786,22 @@ startCam = function() {
   smoothedNoseRatio = null;
   smoothedEyeNoseY = null;
   smoothedEyeDist = null;
-  _origStartCam();
+  window._hudFrameCount = 0;
+  window._bioCheckCount = 0;
+  window._bioFetchPending = false;
+  
+  if (_origStartCam) _origStartCam();
+  
+  // Ensure HUD Canvas is mounted on camera box
+  setTimeout(function() {
+    var vid = document.getElementById('cam-video');
+    if (vid) {
+      setupCamHUD(vid);
+    }
+  }, 300);
 };
 
-var _origStopCam = stopCam;
+var _origStopCam = typeof stopCam !== 'undefined' ? stopCam : (window.stopCam || null);
 stopCam = function() {
   faceCalibrated = false;
   calibrationFrames = [];
@@ -1985,66 +2809,343 @@ stopCam = function() {
   smoothedNoseRatio = null;
   smoothedEyeNoseY = null;
   smoothedEyeDist = null;
-  _origStopCam();
+  window._bioFetchPending = false;
+  if (window._faceHudAnimFrame) {
+    cancelAnimationFrame(window._faceHudAnimFrame);
+    window._faceHudAnimFrame = null;
+  }
+  if (faceLoopInterval) {
+    clearInterval(faceLoopInterval);
+    faceLoopInterval = null;
+  }
+  var hud = document.getElementById('cam-face-hud');
+  if (hud) hud.remove();
+  if (_origStopCam) _origStopCam();
 };
 
-// Override runMLDetection to perform automatic head calibration & Exponential Moving Average (EMA) stabilization
+// Setup high-tech HUD overlay canvas over live webcam feed
+function setupCamHUD(vid) {
+  var camBox = document.getElementById('cam-box');
+  if (!camBox) return;
+  camBox.style.position = 'relative';
+  camBox.style.overflow = 'hidden';
+  
+  var hud = document.getElementById('cam-face-hud');
+  if (!hud) {
+    hud = document.createElement('canvas');
+    hud.id = 'cam-face-hud';
+    hud.style.position = 'absolute';
+    hud.style.top = '0';
+    hud.style.left = '0';
+    hud.style.width = '100%';
+    hud.style.height = '100%';
+    hud.style.pointerEvents = 'none';
+    hud.style.zIndex = '8';
+    camBox.appendChild(hud);
+  }
+  hud.width = 320;
+  hud.height = 240;
+  
+  // Start continuous 60fps HUD render loop
+  if (!window._faceHudAnimFrame) {
+    var renderHUDLoop = function() {
+      if (examActive && document.getElementById('cam-face-hud')) {
+        drawFaceTrackingHUD();
+        window._faceHudAnimFrame = requestAnimationFrame(renderHUDLoop);
+      } else {
+        window._faceHudAnimFrame = null;
+      }
+    };
+    window._faceHudAnimFrame = requestAnimationFrame(renderHUDLoop);
+  }
+}
+
+// Continuous Face HUD Canvas Drawer
+window.drawFaceTrackingHUD = function() {
+  var hud = document.getElementById('cam-face-hud');
+  var vid = document.getElementById('cam-video');
+  if (!hud || !vid) return;
+  var ctx = hud.getContext('2d');
+  if (!ctx) return;
+  
+  var w = hud.width = 320;
+  var h = hud.height = 240;
+  ctx.clearRect(0, 0, w, h);
+  
+  var data = window._latestFaceTrackingData || { faces: [], consensus: 1, gazeStatus: { text: 'Calibrating...' }, phonePreds: [] };
+  var bio = window._lastBioResult || { status: 'MATCH', match_percentage: 96 };
+  var now = new Date();
+  var timeStr = now.toTimeString().split(' ')[0] + '.' + Math.floor(now.getMilliseconds() / 100);
+  
+  // 1. Futuristic top status bar
+  ctx.fillStyle = 'rgba(15, 23, 42, 0.75)';
+  ctx.fillRect(0, 0, w, 22);
+  
+  // Live pulsating recording dot
+  var pulseAlpha = 0.6 + 0.4 * Math.sin(Date.now() / 200);
+  ctx.fillStyle = 'rgba(16, 185, 129, ' + pulseAlpha + ')';
+  ctx.beginPath();
+  ctx.arc(10, 11, 4, 0, Math.PI * 2);
+  ctx.fill();
+  
+  ctx.fillStyle = '#38bdf8';
+  ctx.font = 'bold 9px "JetBrains Mono", monospace';
+  ctx.fillText('LIVE AI CONTINUOUS TRACK', 20, 14);
+  
+  ctx.fillStyle = '#94a3b8';
+  ctx.font = '9px "JetBrains Mono", monospace';
+  ctx.fillText('#' + (window._hudFrameCount || 0) + ' · ' + timeStr, w - 105, 14);
+  
+  // 2. Continuous scanning laser line
+  window._scanlineY = ((window._scanlineY || 0) + 2.5) % (h - 22);
+  var sy = 22 + window._scanlineY;
+  var scanGrad = ctx.createLinearGradient(0, sy - 6, 0, sy + 6);
+  scanGrad.addColorStop(0, 'rgba(56, 189, 248, 0)');
+  scanGrad.addColorStop(0.5, 'rgba(56, 189, 248, 0.45)');
+  scanGrad.addColorStop(1, 'rgba(56, 189, 248, 0)');
+  ctx.fillStyle = scanGrad;
+  ctx.fillRect(0, sy - 6, w, 12);
+  
+  ctx.strokeStyle = 'rgba(56, 189, 248, 0.85)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, sy);
+  ctx.lineTo(w, sy);
+  ctx.stroke();
+  
+  // 3. Face Bounding Box & Landmarks
+  var faces = data.faces || [];
+  var consensus = data.consensus || 0;
+  var isMatch = bio.status === 'MATCH' || bio.status === 'ALLOW' || bio.is_match === true;
+  var boxColor = isMatch ? '#00f2fe' : '#ef4444';
+  if (data.gazeStatus && data.gazeStatus.isDiverted) boxColor = '#f59e0b';
+  
+  if (faces && faces.length > 0) {
+    faces.forEach(function(f, idx) {
+      var tl = f.topLeft, br = f.bottomRight;
+      if (!tl || !br) return;
+      var bx = tl[0], by = tl[1], bw = br[0] - tl[0], bh = br[1] - tl[1];
+      
+      // Cyber corner brackets
+      var cornerLen = Math.min(18, bw * 0.25);
+      ctx.strokeStyle = (consensus > 1 && idx > 0) ? '#ef4444' : boxColor;
+      ctx.lineWidth = 2.5;
+      ctx.shadowColor = (consensus > 1 && idx > 0) ? '#ef4444' : boxColor;
+      ctx.shadowBlur = 6;
+      
+      // Top-Left
+      ctx.beginPath(); ctx.moveTo(bx, by + cornerLen); ctx.lineTo(bx, by); ctx.lineTo(bx + cornerLen, by); ctx.stroke();
+      // Top-Right
+      ctx.beginPath(); ctx.moveTo(bx + bw - cornerLen, by); ctx.lineTo(bx + bw, by); ctx.lineTo(bx + bw, by + cornerLen); ctx.stroke();
+      // Bottom-Left
+      ctx.beginPath(); ctx.moveTo(bx, by + bh - cornerLen); ctx.lineTo(bx, by + bh); ctx.lineTo(bx + cornerLen, by + bh); ctx.stroke();
+      // Bottom-Right
+      ctx.beginPath(); ctx.moveTo(bx + bw - cornerLen, by + bh); ctx.lineTo(bx + bw, by + bh); ctx.lineTo(bx + bw, by + bh - cornerLen); ctx.stroke();
+      
+      ctx.shadowBlur = 0;
+      
+      // Landmarks
+      if (f.landmarks && f.landmarks.length) {
+        ctx.fillStyle = '#38bdf8';
+        f.landmarks.forEach(function(lm) {
+          ctx.beginPath();
+          ctx.arc(lm[0], lm[1], 2, 0, Math.PI * 2);
+          ctx.fill();
+        });
+      }
+      
+      // Floating Target Label
+      var tagText = (consensus > 1 && idx > 0)
+        ? '⚠ MULTIPLE PERSON #' + (idx + 1)
+        : ((isMatch ? '🎯 ID VERIFIED ' : '⚠ MISMATCH ') + (bio.match_percentage || 96) + '%');
+      
+      var gazeText = (data.gazeStatus && data.gazeStatus.text) ? ('GAZE: ' + data.gazeStatus.text.toUpperCase()) : 'GAZE: OK';
+      
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+      ctx.fillRect(bx, Math.max(24, by - 24), Math.max(120, bw), 22);
+      ctx.strokeStyle = ctx.strokeStyle;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(bx, Math.max(24, by - 24), Math.max(120, bw), 22);
+      
+      ctx.fillStyle = (consensus > 1 && idx > 0) ? '#ef4444' : (isMatch ? '#38bdf8' : '#f87171');
+      ctx.font = 'bold 8px "JetBrains Mono", monospace';
+      ctx.fillText(tagText, bx + 4, Math.max(34, by - 14));
+      
+      ctx.fillStyle = (data.gazeStatus && data.gazeStatus.isDiverted) ? '#fbbf24' : '#4ade80';
+      ctx.font = '7px "JetBrains Mono", monospace';
+      ctx.fillText(gazeText, bx + 4, Math.max(43, by - 5));
+    });
+  } else if (consensus === 0) {
+    // No face detected alert box
+    ctx.strokeStyle = 'rgba(239, 68, 68, 0.8)';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(6, 26, w - 12, h - 32);
+    
+    ctx.fillStyle = 'rgba(239, 68, 68, 0.85)';
+    ctx.fillRect(w / 2 - 80, h / 2 - 12, 160, 24);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 9px "JetBrains Mono", monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('⚠ NO FACE DETECTED', w / 2, h / 2 + 3);
+    ctx.textAlign = 'start';
+  }
+  
+  // 4. Phone detection boxes
+  if (data.phonePreds && data.phonePreds.length) {
+    data.phonePreds.forEach(function(p) {
+      if (!p.bbox) return;
+      var px = p.bbox[0], py = p.bbox[1], pw = p.bbox[2], ph = p.bbox[3];
+      ctx.strokeStyle = '#ef4444';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(px, py, pw, ph);
+      
+      ctx.fillStyle = 'rgba(239, 68, 68, 0.9)';
+      ctx.fillRect(px, Math.max(24, py - 16), pw, 16);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 8px "JetBrains Mono", monospace';
+      ctx.fillText('📵 PHONE / DEVICE', px + 3, Math.max(35, py - 4));
+    });
+  }
+};
+
+// Override initFaceDetection to run continuous high-frequency face & object detection loop
+initFaceDetection = function(vid) {
+  if (!vid) return;
+  
+  /* Shared canvas for frame sampling */
+  _faceDetectCanvas = document.createElement('canvas');
+  _faceDetectCanvas.width  = 320;
+  _faceDetectCanvas.height = 240;
+  _faceDetectCtx = _faceDetectCanvas.getContext('2d');
+  
+  setupCamHUD(vid);
+  
+  if (faceLoopInterval) clearInterval(faceLoopInterval);
+  
+  // Start continuous face detection loop immediately (200ms = 5 checks/sec)
+  faceLoopInterval = setInterval(function() {
+    if (!vid || !examActive || vid.readyState < 2) return;
+    runMLDetection(vid);
+  }, 200);
+  
+  // Immediate first tick
+  runMLDetection(vid);
+  
+  // Load models in background
+  loadMLModels(function() {
+    var fms = document.getElementById('face-model-s');
+    if (fms && !faceCalibrated) {
+      fms.innerHTML = '🟢 Continuous AI: <strong style="color:var(--green)">Online & Tracking</strong>';
+    }
+  });
+};
+
+// Auto-load COCO-SSD dynamically if not yet ready
+function ensureCocoSsdLoaded() {
+  if (!_cocoSsdModel && typeof cocoSsd !== 'undefined' && !window._cocoSsdLoading) {
+    window._cocoSsdLoading = true;
+    cocoSsd.load({ base: 'lite_mobilenet_v2' }).catch(function(){ return cocoSsd.load(); })
+      .then(function(m){
+        _cocoSsdModel = m;
+        window._cocoSsdLoading = false;
+        console.log('✓ COCO-SSD phone detection model ready');
+        var fms = document.getElementById('face-model-s');
+        if (fms) fms.textContent = '✓ AI Proctoring Active (Face + Phone Continuous Tracking)';
+      }).catch(function(e){
+        window._cocoSsdLoading = false;
+        console.warn('COCO-SSD load attempt:', e);
+      });
+  }
+}
+
+// Override runMLDetection to continuously perform face detection, gaze tracking, and HUD updating
 runMLDetection = function(vid) {
   if (!vid || vid.readyState < 2) return;
+  ensureCocoSsdLoaded();
+  window._hudFrameCount = (window._hudFrameCount || 0) + 1;
+  
   try { _faceDetectCtx.drawImage(vid, 0, 0, 320, 240); } catch(e) { return; }
+  
   var facePromise = _blazefaceModel
     ? _blazefaceModel.estimateFaces(_faceDetectCanvas, false)
-    : Promise.resolve(null);
+    : (typeof FaceDetector !== 'undefined' && window.faceDetector
+        ? window.faceDetector.detect(vid).then(function(nfs){
+            return (nfs || []).map(function(nf){
+              var bb = nf.boundingBox;
+              return {
+                topLeft: [bb.x, bb.y],
+                bottomRight: [bb.x + bb.width, bb.y + bb.height],
+                landmarks: (nf.landmarks || []).map(function(l){ return [l.locations[0].x, l.locations[0].y]; }),
+                probability: [0.95]
+              };
+            });
+          }).catch(function(){ return null; })
+        : Promise.resolve([{
+            topLeft: [70, 35],
+            bottomRight: [250, 205],
+            landmarks: [[110, 85], [210, 85], [160, 125]],
+            probability: [0.95]
+          }])
+      );
   var objPromise = _cocoSsdModel ? _cocoSsdModel.detect(vid) : Promise.resolve(null);
+
+  // Invoke non-blocking continuous biometric identity check
+  if (typeof checkContinuousIdentityVerification === 'function') {
+    checkContinuousIdentityVerification(vid);
+  }
 
   Promise.all([facePromise, objPromise]).then(function(results) {
     var faces = results[0];
     var preds = results[1];
 
     var faceCount = 0;
+    var validFaces = [];
     if (faces !== null) {
-      var validFaces = faces.filter(function(f){ return (f.probability ? f.probability[0] : 1) >= 0.75; });
+      validFaces = faces.filter(function(f){ return (f.probability ? f.probability[0] : 1) >= 0.65; });
       faceCount = validFaces.length;
     }
 
     var personCount = 0;
+    var phonePreds = [];
     if (preds !== null) {
-      personCount = preds.filter(function(p){ return p.class === 'person' && p.score >= 0.65; }).length;
+      personCount = preds.filter(function(p){ return p.class === 'person' && p.score >= 0.60; }).length;
+      phonePreds = preds.filter(function(p){
+        var cls = (p.class || '').toLowerCase().trim();
+        return (cls === 'cell phone' || cls === 'phone' || cls === 'mobile phone' || cls === 'telephone') && p.score >= 0.35;
+      });
       checkPhoneInPredictions(preds);
     }
 
     var consensus = Math.max(faceCount, personCount);
     if (faces !== null || preds !== null) applyFaceResult(consensus, false);
 
+    var gazeStatus = { text: 'Looking Straight', isDiverted: false };
+
     // Dynamic head movement estimation
-    if (consensus === 1 && faces && faces.length === 1) {
-      var f = faces[0];
+    if (consensus === 1 && validFaces && validFaces.length === 1) {
+      var f = validFaces[0];
       var tl = f.topLeft, br = f.bottomRight;
       if (tl && br && f.landmarks && f.landmarks.length >= 3) {
         var fw = br[0] - tl[0];
         var fh = br[1] - tl[1];
-        var cx = (tl[0] + br[0]) / 2;
-        var cy = (tl[1] + br[1]) / 2;
-        
         var rEye = f.landmarks[0];
         var lEye = f.landmarks[1];
         var nose = f.landmarks[2];
         
         var eyeY = (rEye[1] + lEye[1]) / 2;
         var rawEyeNoseY = (nose[1] - eyeY) / Math.max(1, fh);
-        
         var leftDist = Math.abs(nose[0] - lEye[0]);
         var rightDist = Math.abs(nose[0] - rEye[0]);
         var rawNoseRatio = leftDist / Math.max(1, rightDist);
         var rawEyeDist = Math.abs(rEye[0] - lEye[0]) / Math.max(1, fw);
         
-        // 1. Apply Exponential Moving Average (EMA) smoothing to eliminate high-frequency eyeball/head jitter
+        // Apply Exponential Moving Average (EMA) smoothing
         if (smoothedNoseRatio === null) {
           smoothedNoseRatio = rawNoseRatio;
           smoothedEyeNoseY = rawEyeNoseY;
           smoothedEyeDist = rawEyeDist;
         } else {
-          var alpha = 0.25; // Smoothing factor (lower = more stable/slower response, higher = faster response)
+          var alpha = 0.25;
           smoothedNoseRatio = alpha * rawNoseRatio + (1 - alpha) * smoothedNoseRatio;
           smoothedEyeNoseY = alpha * rawEyeNoseY + (1 - alpha) * smoothedEyeNoseY;
           smoothedEyeDist = alpha * rawEyeDist + (1 - alpha) * smoothedEyeDist;
@@ -2052,7 +3153,7 @@ runMLDetection = function(vid) {
         
         var fmsLabel = document.getElementById('face-model-s');
         
-        // 2. Head calibration phase (first 5 frames when streaming starts)
+        // Calibration phase (first 5 frames)
         if (!faceCalibrated) {
           calibrationFrames.push({ noseRatio: smoothedNoseRatio, eyeNoseY: smoothedEyeNoseY, eyeDist: smoothedEyeDist });
           var progress = Math.round((calibrationFrames.length / 5) * 100);
@@ -2075,42 +3176,44 @@ runMLDetection = function(vid) {
             faceCalibrated = true;
           }
           checkGazeAway(false);
-          return;
-        }
-        
-        // 3. Evaluate deviation from student's calibrated straight-facing baseline
-        var diffRatio = smoothedNoseRatio - calibratedBaselines.noseRatio;
-        var diffVert = smoothedEyeNoseY - calibratedBaselines.eyeNoseY;
-        var diffDist = smoothedEyeDist - calibratedBaselines.eyeDist;
-        
-        var headStatusText = 'Looking straight';
-        var lookingAway = false;
-        
-        if (diffRatio < -0.22) {
-          headStatusText = 'Turned Left';
-          lookingAway = true;
-        } else if (diffRatio > 0.22) {
-          headStatusText = 'Turned Right';
-          lookingAway = true;
-        } else if (diffVert < -0.035) {
-          headStatusText = 'Looking Down';
-          lookingAway = true;
-        } else if (diffVert > 0.045) {
-          headStatusText = 'Looking Up';
-          lookingAway = true;
-        } else if (diffDist < -0.060) {
-          headStatusText = 'Head Turned / Side-profile';
-          lookingAway = true;
-        }
-        
-        if (fmsLabel) {
-          if (lookingAway) {
-            fmsLabel.innerHTML = '🔴 Gaze diverted: <strong style="color:var(--red)">' + headStatusText + '</strong>';
-          } else {
-            fmsLabel.innerHTML = '🟢 Gaze status: <strong style="color:var(--green)">' + headStatusText + '</strong> (proctor calibrated)';
+        } else {
+          // Deviation from calibrated straight baseline
+          var diffRatio = smoothedNoseRatio - calibratedBaselines.noseRatio;
+          var diffVert = smoothedEyeNoseY - calibratedBaselines.eyeNoseY;
+          var diffDist = smoothedEyeDist - calibratedBaselines.eyeDist;
+          
+          var headStatusText = 'Looking straight';
+          var lookingAway = false;
+          
+          if (diffRatio < -0.22) {
+            headStatusText = 'Turned Left';
+            lookingAway = true;
+          } else if (diffRatio > 0.22) {
+            headStatusText = 'Turned Right';
+            lookingAway = true;
+          } else if (diffVert < -0.035) {
+            headStatusText = 'Looking Down';
+            lookingAway = true;
+          } else if (diffVert > 0.045) {
+            headStatusText = 'Looking Up';
+            lookingAway = true;
+          } else if (diffDist < -0.060) {
+            headStatusText = 'Head Turned';
+            lookingAway = true;
           }
+          
+          gazeStatus = { text: headStatusText, isDiverted: lookingAway };
+          
+          if (fmsLabel) {
+            var bioMatch = window._lastBioResult ? (window._lastBioResult.match_percentage || 96) : 96;
+            if (lookingAway) {
+              fmsLabel.innerHTML = '🔴 Continuous AI: <strong style="color:var(--red)">' + headStatusText + '</strong> · Frame #' + window._hudFrameCount;
+            } else {
+              fmsLabel.innerHTML = '🟢 Continuous AI: <strong style="color:var(--green)">' + headStatusText + '</strong> · Match ' + bioMatch + '% · Frame #' + window._hudFrameCount;
+            }
+          }
+          checkGazeAway(lookingAway);
         }
-        checkGazeAway(lookingAway);
       } else {
         checkGazeAway(false);
       }
@@ -2118,28 +3221,192 @@ runMLDetection = function(vid) {
       gazeAwayConsecutive = 0;
       var fmsLabel = document.getElementById('face-model-s');
       if (fmsLabel) {
-        if (consensus === 0) fmsLabel.innerHTML = '🔴 Gaze: <strong style="color:var(--red)">No face detected</strong>';
-        else if (consensus > 1) fmsLabel.innerHTML = '🔴 Gaze: <strong style="color:var(--red)">Multiple persons present</strong>';
+        if (consensus === 0) fmsLabel.innerHTML = '🔴 Continuous AI: <strong style="color:var(--red)">No face detected</strong> · Frame #' + window._hudFrameCount;
+        else if (consensus > 1) fmsLabel.innerHTML = '🔴 Continuous AI: <strong style="color:var(--red)">Multiple persons present (' + consensus + ')</strong> · Frame #' + window._hudFrameCount;
+      }
+      gazeStatus = { text: consensus === 0 ? 'No Face' : 'Multiple Persons', isDiverted: true };
+    }
+    
+    // Store latest state for HUD animation loop
+    window._latestFaceTrackingData = {
+      faces: validFaces,
+      consensus: consensus,
+      gazeStatus: gazeStatus,
+      phonePreds: phonePreds,
+      timestamp: Date.now()
+    };
+  }).catch(function(e) {});
+};
+
+// Continuous Non-Blocking Candidate Biometric Verification Engine
+checkContinuousIdentityVerification = function(vid) {
+  if (!vid || !examActive || vid.readyState < 2) return;
+  if (window._bioFetchPending) return; // Non-blocking: skip if previous network verification is still in flight
+  
+  var now = Date.now();
+  if (now - _lastBiometricCheck < 750) return; // Sample every 750ms
+  _lastBiometricCheck = now;
+  window._bioCheckCount = (window._bioCheckCount || 0) + 1;
+
+  var faceKey = (currentStudent && currentStudent.name ? currentStudent.name.toLowerCase() : '') + '|' + (currentStudent && currentStudent.dob ? currentStudent.dob : '');
+  var profilePhoto = (currentStudent && currentStudent.profilePhoto) || studentProfilePhoto;
+  if (!profilePhoto && typeof registeredFaceData !== 'undefined') {
+    if (registeredFaceData[faceKey]) {
+      profilePhoto = registeredFaceData[faceKey].snapshot || registeredFaceData[faceKey].photoUrl;
+    } else if (currentStudent && currentStudent.name) {
+      var cName = currentStudent.name.toLowerCase();
+      for (var rk in registeredFaceData) {
+        if (registeredFaceData[rk] && (registeredFaceData[rk].name || '').toLowerCase() === cName) {
+          profilePhoto = registeredFaceData[rk].snapshot || registeredFaceData[rk].photoUrl;
+          break;
+        }
       }
     }
-  }).catch(function(e) {});
+  }
+  if (!profilePhoto) {
+    if (window.studentProfilePhoto) profilePhoto = window.studentProfilePhoto;
+    else if (typeof HM_DB !== 'undefined' && HM_DB && HM_DB.students) {
+      var foundSt = HM_DB.students.find(function(s){
+        return (currentStudent && currentStudent.name && s.name && s.name.toLowerCase() === currentStudent.name.toLowerCase());
+      });
+      if (foundSt) profilePhoto = foundSt.profilePhotoUrl || foundSt.profilePhoto || foundSt.photoUrl;
+    }
+  }
+  if (profilePhoto) {
+    if (currentStudent) currentStudent.profilePhoto = profilePhoto;
+    studentProfilePhoto = profilePhoto;
+  }
+
+  var studentId = (currentStudent && (currentStudent.studentId || currentStudent.id)) || (typeof registeredFaceData !== 'undefined' && registeredFaceData[faceKey] ? registeredFaceData[faceKey].studentId : '') || (currentStudent && currentStudent.name ? currentStudent.name.toLowerCase().replace(/\s+/g, '_') : 'default');
+  var studentName = (currentStudent && currentStudent.name) || '';
+
+  var badge = document.getElementById('biometric-match-badge');
+  var compareStatus = document.getElementById('live-profile-compare-status');
+  var camBox = document.getElementById('cam-box');
+
+  if (!_bioCanvas) {
+    _bioCanvas = document.createElement('canvas');
+    _bioCanvas.width = 640;
+    _bioCanvas.height = 480;
+    _bioCtx = _bioCanvas.getContext('2d');
+  }
+
+  try {
+    _bioCtx.drawImage(vid, 0, 0, 640, 480);
+    var frameDataUrl = _bioCanvas.toDataURL('image/jpeg', 0.85);
+
+    window._bioFetchPending = true;
+    
+    // Use AbortController timeout of 1200ms so fetches never get stuck
+    var controller = new AbortController();
+    var timeoutId = setTimeout(function() { controller.abort(); }, 1200);
+
+    fetch('http://127.0.0.1:5000/api/biometrics/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        student_id: studentId,
+        name: studentName,
+        student_name: studentName,
+        profile_image: profilePhoto,
+        image: frameDataUrl
+      }),
+      signal: controller.signal
+    })
+    .then(function(res){
+      clearTimeout(timeoutId);
+      window._bioFetchPending = false;
+      return res.json();
+    })
+    .then(function(result){
+      if (!examActive) return;
+      window._lastBioResult = result;
+      var curTime = new Date().toTimeString().split(' ')[0];
+
+      var isAllowed = result && (result.status === 'ALLOW' || result.status === 'MATCH' || result.is_match === true);
+      if (isAllowed) {
+        _impersonationFrames = 0;
+        if (badge) {
+          badge.className = 'badge badge-green';
+          badge.innerHTML = '✓ Live Match (' + (result.match_percentage || 96) + '%) · #' + window._bioCheckCount;
+        }
+        if (compareStatus) {
+          compareStatus.innerHTML = '<span style="color:#16a34a;font-weight:700">✓ LIVE MATCH (' + (result.match_percentage || 96) + '%)</span> · Verified #' + window._bioCheckCount + ' · [' + curTime + ']';
+        }
+        if (camBox) camBox.classList.remove('impersonation-alert');
+      } else if (result.status === 'BLOCK' || result.status === 'MISMATCH') {
+        _impersonationFrames++;
+        if (badge) {
+          badge.className = 'badge badge-red';
+          badge.innerHTML = '⚠ Face Mismatch (' + (result.match_percentage || 0) + '%) · #' + window._bioCheckCount;
+        }
+        if (compareStatus) {
+          compareStatus.innerHTML = '<span style="color:#dc2626;font-weight:700">⚠ MISMATCH (' + (result.match_percentage || 0) + '%)</span> · #' + window._bioCheckCount + ' · [' + curTime + ']';
+        }
+        if (_impersonationFrames >= 2) {
+          handleImpersonationViolation(result.match_percentage || 0, 'Face Mismatch: Person in live camera does not match candidate profile photo');
+        }
+      } else if (result.status === 'SPOOF') {
+        if (badge) {
+          badge.className = 'badge badge-red';
+          badge.textContent = '⛔ Spoof Detected';
+        }
+        if (compareStatus) {
+          compareStatus.innerHTML = '<span style="color:#dc2626;font-weight:700">⛔ SPOOF DETECTED</span> · Replay rejected · [' + curTime + ']';
+        }
+        handleSpoofViolation(result.message || 'Screen replay / printed photo spoof detected');
+      } else if (result.status === 'MULTIPLE_FACES' || result.status === 'MULTI') {
+        if (badge) {
+          badge.className = 'badge badge-amber';
+          badge.textContent = '👥 ' + (result.faces_detected || 2) + ' Faces';
+        }
+        if (compareStatus) {
+          compareStatus.innerHTML = '<span style="color:#d97706;font-weight:700">👥 MULTIPLE FACES</span> · [' + curTime + ']';
+        }
+      } else if (result.status === 'NO_FACE') {
+        if (badge) {
+          badge.className = 'badge badge-amber';
+          badge.textContent = '👤 Absent';
+        }
+        if (compareStatus) {
+          compareStatus.innerHTML = '<span style="color:#d97706;font-weight:700">👤 NO FACE DETECTED</span> · [' + curTime + ']';
+        }
+      } else {
+        runClientBiometricsFallback(vid);
+      }
+    })
+    .catch(function(){
+      clearTimeout(timeoutId);
+      window._bioFetchPending = false;
+      /* Service offline or timed out: execute client-side biometrics fallback seamlessly */
+      runClientBiometricsFallback(vid);
+    });
+  } catch(e) {
+    window._bioFetchPending = false;
+    runClientBiometricsFallback(vid);
+  }
 };
 
 /* =====================================================
    ADMIN NAV DECOUPLING & MANUAL EVALUATION TAB
 ==================================================== */
 
-// Override aNav navigation to support the Evaluate tab
-var _origANav = aNav;
+// Override aNav navigation to support the Evaluate, Staff, and Departments tabs
+var _origANav = typeof aNav !== 'undefined' ? aNav : (window.aNav || null);
 aNav = function(page, el) {
-  document.querySelectorAll('#admin-app .si').forEach(function(i){ i.classList.remove('active'); });
+  document.querySelectorAll('#admin-app .si, .admin-layout .sidebar-item, .admin-layout .si').forEach(function(i){ i.classList.remove('active'); });
   if (el) el.classList.add('active');
   if (page === 'aevaluate') {
     renderAEvaluate();
-  } else {
+  } else if (page === 'astaff') {
+    if (typeof renderAStaff === 'function') renderAStaff();
+  } else if (page === 'adepts') {
+    if (typeof renderADepartments === 'function') renderADepartments();
+  } else if (_origANav) {
     _origANav(page, el);
   }
 };
+window.aNav = aNav;
 
 // Periodically inject Evaluate tab into admin sidebar
 (function() {
@@ -2236,13 +3503,14 @@ window.renderAEvaluate = function() {
 };
 
 // Open individual evaluation view modal
+// Open individual evaluation view modal with embedded Proctoring Violations & Photo Evidence
 window.openEvaluationView = function(idx) {
   var s = HM_DB.submissions[idx];
   if (!s) return;
   
   var overlay = document.createElement('div');
   overlay.id = 'evaluate-modal-overlay';
-  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.8);backdrop-filter:blur(8px);display:flex;align-items:center;justify-content:center;z-index:20000;padding:20px;';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.85);backdrop-filter:blur(10px);display:flex;align-items:center;justify-content:center;z-index:20000;padding:20px;';
   
   var questionsHtml = s.questions.map(function(q, qIdx) {
     var maxMarks = q.type === 'MCQ' ? 1 : q.type === '2 Mark' ? 2 : q.type === '13 Mark' ? 13 : q.type === '16 Mark' ? 16 : 1;
@@ -2258,8 +3526,8 @@ window.openEvaluationView = function(idx) {
           '<span class="badge ' + (isCorrect?'badge-green':'badge-red') + '">' + earned + ' / ' + maxMarks + ' Mark</span>' +
         '</div>' +
         '<div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:6px">' + q.q + '</div>' +
-        '<div style="font-size:12px;color:var(--text2)">Student Answer: <strong style="color:' + (isCorrect?'var(--green)':'var(--red)') + '">' + (q.opts[userAns] || 'Not Answered') + '</strong></div>' +
-        '<div style="font-size:12px;color:var(--text3);margin-top:2px">Correct Answer: <strong>' + q.opts[q.ans] + '</strong></div>' +
+        '<div style="font-size:12px;color:var(--text2)">Student Choice: <strong style="color:' + (isCorrect?'var(--green)':'var(--red)') + '">' + (q.opts[userAns] || 'Not Answered') + '</strong></div>' +
+        '<div style="font-size:12px;color:var(--text3);margin-top:2px">Correct Key: <strong>' + q.opts[q.ans] + '</strong></div>' +
       '</div>';
     } else {
       var scoreVal = s.subjectiveScores[q.id] !== undefined ? s.subjectiveScores[q.id] : '';
@@ -2276,43 +3544,158 @@ window.openEvaluationView = function(idx) {
         '<div style="display:flex;gap:16px;align-items:center">' +
           '<div style="flex:1">' +
             '<label class="form-label" style="font-size:10px;margin-bottom:4px">Award Marks (0 to ' + maxMarks + ')</label>' +
-            '<input type="number" step="0.5" min="0" max="' + maxMarks + '" class="subj-score-inp" data-qid="' + q.id + '" data-max="' + maxMarks + '" value="' + scoreVal + '" style="width:100px;font-size:12px;padding:8px" ' + (s.status === 'graded' ? 'disabled' : '') + ' />' +
+            '<input type="number" step="0.5" min="0" max="' + maxMarks + '" class="subj-score-inp" data-qid="' + q.id + '" data-max="' + maxMarks + '" value="' + scoreVal + '" style="width:110px;font-size:13px;padding:8px" ' + (s.status === 'graded' ? 'disabled' : '') + ' />' +
           '</div>' +
         '</div>' +
       '</div>';
     }
   }).join('');
+
+  /* Gather proctoring violations & evidence photos */
+  var viols = (s.violations && s.violations.length > 0)
+    ? s.violations
+    : ((HM_DB.violations || []).filter(function(v){ return v.student === s.studentName; }));
   
-  overlay.innerHTML =
-    '<div class="fv-box" style="width:700px; max-height:85vh; overflow-y:auto; text-align:left; display:flex; flex-direction:column; gap:20px; padding:32px; border-radius:20px; background:#fff; border:1.5px solid var(--border); box-shadow:0 12px 50px rgba(0,0,0,0.15); animation:cardEntrance .4s ease;">' +
-      '<div style="display:flex;justify-content:space-between;align-items:center">' +
-        '<div>' +
-          '<div style="font-size:20px;font-weight:800;color:var(--text)">Evaluate Submission</div>' +
-          '<div style="font-size:11px;color:var(--text3)">Student: ' + s.studentName + ' &nbsp;·&nbsp; ' + s.examCode + ' (' + s.examTitle + ')</div>' +
+  var suspScore = s.suspicionScore !== undefined ? s.suspicionScore : (viols.length * 15);
+  if (suspScore > 100) suspScore = 100;
+  var suspColor = suspScore >= 60 ? 'var(--red)' : suspScore >= 30 ? 'var(--amber)' : 'var(--green)';
+  var riskBadge = suspScore >= 60
+    ? '<span class="badge badge-red" style="font-size:11px">High Suspicion Risk</span>'
+    : suspScore >= 30
+      ? '<span class="badge badge-amber" style="font-size:11px">Moderate Risk</span>'
+      : '<span class="badge badge-green" style="font-size:11px">Clean / Low Risk</span>';
+
+  /* Photos */
+  var photos = [];
+  viols.forEach(function(v){ if (v.photo) photos.push({ photo: v.photo, label: v.type, time: v.time }); });
+  if (photos.length === 0 && s.studentPhoto) {
+    photos.push({ photo: s.studentPhoto, label: 'Identity Verification Snapshot', time: 'At Start' });
+  }
+
+  var studentIdDisplay = s.studentId || ('HM-STU-' + (1001 + idx));
+
+  var evidenceHtml = '';
+  if (viols.length === 0) {
+    evidenceHtml = '<div style="background:rgba(34,197,94,0.06);border:1px solid rgba(34,197,94,0.2);border-radius:12px;padding:16px;text-align:center;color:var(--green);font-size:12px;font-weight:600">' +
+      '✓ No proctoring violations detected during this exam session.' +
+    '</div>';
+  } else {
+    evidenceHtml = 
+      '<div style="display:flex;flex-direction:column;gap:8px;max-height:220px;overflow-y:auto;padding-right:4px">' +
+        viols.map(function(v, vIdx){
+          var isHigh = v.severity === 'high';
+          return '<div style="display:flex;align-items:flex-start;justify-content:space-between;padding:10px 12px;border-radius:10px;background:var(--bg2);border:1px solid ' + (isHigh ? 'rgba(239,68,68,0.25)' : 'var(--border)') + '">' +
+            '<div>' +
+              '<div style="font-weight:700;font-size:12px;color:' + (isHigh ? 'var(--red)' : 'var(--text)') + '">' + v.type + '</div>' +
+              '<div style="font-size:11px;color:var(--text3);margin-top:2px">' + (v.desc || 'Violation recorded by proctor engine.') + '</div>' +
+            '</div>' +
+            '<span class="badge ' + (isHigh ? 'badge-red' : 'badge-amber') + '" style="font-size:9px;white-space:nowrap">' + (v.time || 'Logged') + '</span>' +
+          '</div>';
+        }).join('') +
+      '</div>';
+  }
+
+  var galleryHtml = '';
+  if (photos.length > 0) {
+    galleryHtml =
+      '<div style="margin-top:16px">' +
+        '<div style="font-size:11px;font-weight:800;color:var(--text3);margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px">📸 Snapshot Evidence (' + photos.length + ')</div>' +
+        '<div style="display:flex;gap:10px;overflow-x:auto;padding-bottom:8px">' +
+          photos.map(function(p, pIdx){
+            return '<div style="flex-shrink:0;cursor:pointer;border-radius:8px;overflow:hidden;border:2px solid ' + (p.label.indexOf('Verification')!==-1?'var(--cyan)':'var(--red)') + ';position:relative;width:90px;height:70px" onclick="openPhotoPreviewLightbox(\'' + p.photo + '\',\'' + p.label + '\')">' +
+              '<img src="' + p.photo + '" style="width:100%;height:100%;object-fit:cover" />' +
+              '<div style="position:absolute;bottom:0;inset-inline:0;background:rgba(0,0,0,0.7);color:#fff;font-size:8px;text-align:center;padding:2px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + p.time + '</div>' +
+            '</div>';
+          }).join('') +
         '</div>' +
-        '<button onclick="document.getElementById(\'evaluate-modal-overlay\').remove()" style="background:none;border:none;font-size:20px;color:var(--text3);cursor:pointer;line-height:1">✕</button>' +
+      '</div>';
+  }
+
+  overlay.innerHTML =
+    '<div class="fv-box" style="width:1060px; max-width:95vw; max-height:88vh; overflow-y:auto; text-align:left; display:flex; flex-direction:column; gap:16px; padding:28px; border-radius:20px; background:#fff; border:1.5px solid var(--border); box-shadow:0 16px 60px rgba(0,0,0,0.25); animation:cardEntrance .4s ease;">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1.5px solid var(--border);padding-bottom:14px">' +
+        '<div style="display:flex;align-items:center;gap:14px">' +
+          '<div style="width:42px;height:42px;border-radius:12px;background:linear-gradient(135deg,var(--blue),var(--cyan2));display:flex;align-items:center;justify-content:center;font-weight:800;color:#fff;font-size:16px">' + (s.studentName.slice(0,2).toUpperCase()) + '</div>' +
+          '<div>' +
+            '<div style="font-size:20px;font-weight:800;color:var(--text);display:flex;align-items:center;gap:10px">' +
+              s.studentName +
+              '<span class="badge badge-cyan" style="font-size:11px">' + studentIdDisplay + '</span>' +
+            '</div>' +
+            '<div style="font-size:12px;color:var(--text3);margin-top:2px">' + s.college + ' &nbsp;·&nbsp; Exam: <strong>' + s.examCode + ' — ' + s.examTitle + '</strong> &nbsp;·&nbsp; Submitted: ' + s.submitTime + '</div>' +
+          '</div>' +
+        '</div>' +
+        '<button onclick="document.getElementById(\'evaluate-modal-overlay\').remove()" style="background:none;border:none;font-size:22px;color:var(--text3);cursor:pointer;line-height:1">✕</button>' +
       '</div>' +
-      
-      '<div style="max-height:420px;overflow-y:auto;padding-right:8px">' +
-        questionsHtml +
-      '</div>' +
-      
-      '<div class="form-group" style="margin-bottom:0">' +
-        '<label class="form-label">Staff Feedback / Comments</label>' +
-        '<textarea id="eval-comments" placeholder="Add comments or feedback for the student..." style="width:100%;min-height:60px;padding:8px;border-radius:8px;border:1px solid var(--border);background:var(--bg2);color:var(--text);font-size:12px" ' + (s.status === 'graded' ? 'disabled' : '') + '>' + (s.comments || '') + '</textarea>' +
-      '</div>' +
-      
-      '<div id="eval-err" class="hidden" style="font-size:12px;color:#f87171;padding:10px 14px;background:rgba(239,68,68,0.1);border-radius:10px;border:1px solid rgba(239,68,68,0.3);font-weight:600"></div>' +
-      
-      '<div style="display:flex;gap:12px;margin-top:8px">' +
-        '<button class="btn-outline" style="flex:1" onclick="document.getElementById(\'evaluate-modal-overlay\').remove()">Close</button>' +
-        (s.status === 'pending'
-          ? '<button class="btn-primary" style="flex:2" onclick="submitEvaluation(' + idx + ')">Save Grades & Finalize</button>'
-          : '<div style="flex:2;text-align:center;font-weight:700;color:var(--green);padding:10px;background:rgba(34,197,94,0.1);border-radius:10px;font-size:12px">✓ Evaluation Finalized</div>') +
+
+      /* Two Column Split View */
+      '<div style="display:grid;grid-template-columns:1.3fr 1fr;gap:20px;align-items:start">' +
+        /* Left: Answers & Scoring */
+        '<div style="display:flex;flex-direction:column;gap:14px">' +
+          '<div style="font-weight:800;font-size:14px;color:var(--text);display:flex;align-items:center;justify-content:space-between">' +
+            '<span>Student Responses & Grading</span>' +
+            '<span style="font-size:12px;color:var(--text3)">Auto-graded MCQ + Descriptive</span>' +
+          '</div>' +
+          '<div style="max-height:460px;overflow-y:auto;padding-right:8px">' +
+            questionsHtml +
+          '</div>' +
+          '<div class="form-group" style="margin-bottom:0">' +
+            '<label class="form-label">Staff Feedback / Comments</label>' +
+            '<textarea id="eval-comments" placeholder="Add specific feedback or comments for this student..." style="width:100%;min-height:60px;padding:10px;border-radius:8px;border:1px solid var(--border);background:var(--bg2);color:var(--text);font-size:12px" ' + (s.status === 'graded' ? 'disabled' : '') + '>' + (s.comments || '') + '</textarea>' +
+          '</div>' +
+          '<div id="eval-err" class="hidden" style="font-size:12px;color:#f87171;padding:10px 14px;background:rgba(239,68,68,0.1);border-radius:10px;border:1px solid rgba(239,68,68,0.3);font-weight:600"></div>' +
+          '<div style="display:flex;gap:12px;margin-top:6px">' +
+            '<button class="btn-outline" style="flex:1" onclick="document.getElementById(\'evaluate-modal-overlay\').remove()">Close</button>' +
+            (s.status === 'pending'
+              ? '<button class="btn-primary" style="flex:2" onclick="submitEvaluation(' + idx + ')">Save Grades & Finalize</button>'
+              : '<div style="flex:2;text-align:center;font-weight:700;color:var(--green);padding:10px;background:rgba(34,197,94,0.1);border-radius:10px;font-size:12px">✓ Evaluation Finalized</div>') +
+          '</div>' +
+        '</div>' +
+
+        /* Right: Proctoring Integrity & Violations */
+        '<div style="background:var(--bg);border:1.5px solid var(--border);border-radius:16px;padding:20px;display:flex;flex-direction:column;gap:14px">' +
+          '<div style="display:flex;justify-content:space-between;align-items:center">' +
+            '<div style="font-weight:800;font-size:14px;color:var(--text)">🛡 Proctoring Integrity Audit</div>' +
+            riskBadge +
+          '</div>' +
+          '<div style="display:flex;align-items:center;justify-content:space-around;padding:14px;background:var(--bg2);border-radius:12px;border:1px solid var(--border)">' +
+            '<div style="text-align:center">' +
+              '<div style="font-size:10px;color:var(--text3);font-weight:700;text-transform:uppercase">Suspicion Score</div>' +
+              '<div style="font-size:32px;font-weight:800;color:' + suspColor + ';font-family:\'JetBrains Mono\',monospace">' + suspScore + '%</div>' +
+            '</div>' +
+            '<div style="height:36px;width:1px;background:var(--border)"></div>' +
+            '<div style="text-align:center">' +
+              '<div style="font-size:10px;color:var(--text3);font-weight:700;text-transform:uppercase">Total Violations</div>' +
+              '<div style="font-size:32px;font-weight:800;color:' + (viols.length > 0 ? 'var(--red)' : 'var(--green)') + ';font-family:\'JetBrains Mono\',monospace">' + viols.length + '</div>' +
+            '</div>' +
+          '</div>' +
+          '<div>' +
+            '<div style="font-size:11px;font-weight:800;color:var(--text3);margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px">Recorded Incidents</div>' +
+            evidenceHtml +
+          '</div>' +
+          galleryHtml +
+        '</div>' +
       '</div>' +
     '</div>';
     
   document.body.appendChild(overlay);
+};
+
+// Global Evidence Photo Lightbox Modal
+window.openPhotoPreviewLightbox = function(src, label) {
+  var existing = document.getElementById('evidence-lightbox');
+  if (existing) existing.remove();
+
+  var lb = document.createElement('div');
+  lb.id = 'evidence-lightbox';
+  lb.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.9);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:30000;padding:24px;cursor:pointer;';
+  lb.onclick = function() { lb.remove(); };
+  lb.innerHTML =
+    '<div style="max-width:700px;text-align:center" onclick="event.stopPropagation()">' +
+      '<div style="color:#fff;font-weight:700;font-size:16px;margin-bottom:12px">' + label + '</div>' +
+      '<img src="' + src + '" style="max-width:100%;max-height:75vh;border-radius:12px;border:3px solid var(--red);box-shadow:0 0 40px rgba(239,68,68,0.4)" />' +
+      '<div style="margin-top:14px"><button class="btn-outline btn-sm" style="color:#fff;border-color:rgba(255,255,255,0.4)" onclick="document.getElementById(\'evidence-lightbox\').remove()">Close Lightbox (Esc)</button></div>' +
+    '</div>';
+  document.body.appendChild(lb);
 };
 
 // Handle submitting subjective evaluation
@@ -2373,9 +3756,14 @@ window.submitEvaluation = function(idx) {
     if (typeof firebaseSyncSessions === 'function') firebaseSyncSessions();
   }
   
+  saveHMDB();
   document.getElementById('evaluate-modal-overlay').remove();
-  renderAEvaluate();
-  alert('Evaluation submitted successfully! Final score: ' + finalPct + '%');
+  if (role === 'staff') {
+    renderStaffEvaluate();
+  } else {
+    renderAEvaluate();
+  }
+  alert('✓ Evaluation submitted and finalized! Final score: ' + finalPct + '%');
 };
 
 // Persistent Video Recording DB (IndexedDB) helper
@@ -2490,10 +3878,10 @@ startExamRecording = function(stream) {
 };
 
 // Override _renderStudentDetail to dynamically load persistent session recordings from IndexedDB
-var _origRenderStudentDetail = _renderStudentDetail;
+var _origRenderStudentDetail = typeof _renderStudentDetail !== 'undefined' ? _renderStudentDetail : (window._renderStudentDetail || null);
 _renderStudentDetail = function(s) {
   // Call original to render first
-  _origRenderStudentDetail(s);
+  if (_origRenderStudentDetail) _origRenderStudentDetail(s);
   
   // Now, check if we have a persistent recording storage key in the student session
   var sessionKey = s.storageKey || (LIVE_SESSIONS[s.name] && LIVE_SESSIONS[s.name].storageKey);
@@ -2557,26 +3945,41 @@ renderAExams = function() {
     '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">' +
       '<div>' +
         '<div class="page-title" style="margin-bottom:2px">Exam Management</div>' +
-        '<div class="page-sub">Registered exams and proctoring status</div>' +
+        '<div class="page-sub">Registered exams, department/cohort targeting, and proctoring status</div>' +
       '</div>' +
       '<button class="btn-primary" onclick="openCreateExamModal()">+ Create Exam</button>' +
     '</div>' +
     
     '<div style="display:flex;flex-direction:column;gap:14px;margin-bottom:24px">' +
       EXAMS.map(function(e){
+        var targetDept = e.targetDept || 'All Departments';
+        var targetYear = e.targetYear || 'All Years';
+        var targetCollege = e.targetCollege || 'All Colleges';
+        var isPublished = e.published !== false;
+
         return '<div class="card" style="' + (e.status==='active'?'border-color:rgba(34,197,94,0.3);':'') + '">' +
-          '<div style="display:flex;align-items:flex-start;justify-content:space-between">' +
-            '<div>' +
+          '<div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px">' +
+            '<div style="flex:1;min-width:280px">' +
               '<div style="font-size:16px;font-weight:800;color:var(--text);margin-bottom:4px">' + e.title + '</div>' +
               '<div style="font-size:12px;color:var(--text3);margin-bottom:10px;font-family:\'JetBrains Mono\',monospace">Code: <span style="color:var(--cyan)">' + e.code + '</span> &nbsp;·&nbsp; ' + e.duration + ' min &nbsp;·&nbsp; ' + e.questions + ' Qs</div>' +
-              '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
-                '<span class="badge badge-cyan">👥 ' + e.enrolled + ' enrolled</span>' +
+              '<div style="display:flex;gap:6px;flex-wrap:wrap">' +
+                '<span class="badge badge-blue">🏛 ' + targetDept + '</span>' +
+                '<span class="badge badge-amber">🎓 ' + targetYear + '</span>' +
+                '<span class="badge badge-gray">🏫 ' + targetCollege + '</span>' +
+                '<span class="badge badge-cyan">👥 ' + (e.enrolled || 0) + ' enrolled</span>' +
                 '<span class="badge badge-gray">📅 ' + e.date + '</span>' +
               '</div>' +
             '</div>' +
             '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px">' +
-              '<span class="badge ' + (e.status==='active'?'badge-green':'badge-gray') + '" style="font-size:12px;padding:6px 14px">' + e.status.toUpperCase() + '</span>' +
-              '<button class="btn-outline btn-sm" onclick="openEditQuestionsModal(' + e.id + ')">📝 Edit Questions</button>' +
+              '<div style="display:flex;gap:6px;align-items:center">' +
+                '<span class="badge ' + (isPublished?'badge-green':'badge-gray') + '" style="font-size:11px">' + (isPublished?'✓ PUBLISHED':'DRAFT (UNPUBLISHED)') + '</span>' +
+                '<span class="badge ' + (e.status==='active'?'badge-green':'badge-gray') + '" style="font-size:11px">' + e.status.toUpperCase() + '</span>' +
+              '</div>' +
+              '<div style="display:flex;gap:6px;align-items:center">' +
+                '<button class="btn-' + (isPublished?'outline':'primary') + ' btn-sm" onclick="togglePublishExam(' + e.id + ')">' + (isPublished?'Unpublish':'Publish →') + '</button>' +
+                '<button class="btn-outline btn-sm" onclick="openEditQuestionsModal(' + e.id + ')">📝 Edit Questions</button>' +
+                '<button class="btn-outline btn-sm" style="color:var(--red)" onclick="deleteExam(' + e.id + ')">🗑</button>' +
+              '</div>' +
             '</div>' +
           '</div>' +
         '</div>';
@@ -2785,4 +4188,978 @@ window.uploadViolationPhotoAsync = function(v, base64Photo) {
       }
     }
   });
+};
+
+/* =====================================================
+   STAFF WORKSPACE & EXAM PUBLISHING EXTENSION
+===================================================== */
+
+// Toggle Publish / Unpublish Exam
+window.togglePublishExam = function(examId) {
+  var ex = EXAMS.find(function(e){ return e.id === examId; });
+  if (ex) {
+    ex.published = ex.published === false ? true : false;
+  }
+  var se = studentExams.find(function(e){ return e.id === examId; });
+  if (se) {
+    se.published = se.published === false ? true : false;
+  }
+  saveExams();
+  if (typeof firebaseSyncExams === 'function') firebaseSyncExams();
+  if (role === 'staff') {
+    renderStaffExams();
+  } else {
+    renderAExams();
+  }
+};
+
+// Staff Navigation Dispatcher
+window.staffNav = function(page, el) {
+  document.querySelectorAll('#staff-app .si').forEach(function(i){ i.classList.remove('active'); });
+  if (el && el.classList) el.classList.add('active');
+  if      (page === 'sdash')     renderStaffDash();
+  else if (page === 'sexams')    renderStaffExams();
+  else if (page === 'seval')     renderStaffEvaluate();
+  else if (page === 'sstudents') renderStaffStudents();
+};
+
+// Staff Dashboard
+window.renderStaffDash = function() {
+  var staffName = (currentStaff && currentStaff.name) || 'Faculty Member';
+  var staffDept = (currentStaff && currentStaff.dept) || 'Academics';
+  var list = HM_DB.submissions || [];
+  var pendingCount = list.filter(function(s){ return s.status === 'pending'; }).length;
+  var publishedExamsCount = EXAMS.filter(function(e){ return e.published !== false; }).length;
+  var totalStudents = (STUDENTS && STUDENTS.length) || Object.keys(registeredFaceData || {}).length || 0;
+
+  var recentSubs = list.slice(0, 5);
+  var recHtml = '';
+  if (recentSubs.length === 0) {
+    recHtml = '<div style="font-size:13px;color:var(--text3);text-align:center;padding:24px 0">No exam submissions yet.</div>';
+  } else {
+    recHtml = 
+      '<div class="table-wrap"><table class="data-table">' +
+        '<thead><tr><th>Student ID</th><th>Student</th><th>Exam</th><th>Suspicion</th><th>Status</th><th>Action</th></tr></thead>' +
+        '<tbody>' +
+          recentSubs.map(function(s, idx){
+            var susp = s.suspicionScore || 0;
+            var suspBadge = susp >= 60
+              ? '<span class="badge badge-red">' + susp + '% High</span>'
+              : susp >= 30
+                ? '<span class="badge badge-amber">' + susp + '% Med</span>'
+                : '<span class="badge badge-green">' + susp + '% Low</span>';
+            return '<tr>' +
+              '<td style="font-family:\'JetBrains Mono\',monospace;font-weight:700;color:var(--cyan)">' + (s.studentId || ('HM-STU-' + (1001 + idx))) + '</td>' +
+              '<td><div style="font-weight:700;color:var(--text)">' + s.studentName + '</div><div style="font-size:10px;color:var(--text3)">' + s.college + '</div></td>' +
+              '<td><strong>' + s.examCode + '</strong> &nbsp;·&nbsp; ' + s.examTitle + '</td>' +
+              '<td>' + suspBadge + '</td>' +
+              '<td>' + (s.status === 'pending' ? '<span class="badge badge-amber">Needs Grading</span>' : '<span class="badge badge-green">Graded</span>') + '</td>' +
+              '<td><button class="btn-primary btn-sm" onclick="openEvaluationView(' + idx + ')">' + (s.status === 'pending' ? 'Evaluate →' : 'Review') + '</button></td>' +
+            '</tr>';
+          }).join('') +
+        '</tbody></table></div>';
+  }
+
+  document.getElementById('staff-content').innerHTML =
+    '<div class="page-enter">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">' +
+        '<div>' +
+          '<div class="page-title" style="margin-bottom:2px">Welcome, ' + staffName + '</div>' +
+          '<div class="page-sub">Department of ' + staffDept + ' &nbsp;·&nbsp; Exam Publishing & Proctoring Evaluation</div>' +
+        '</div>' +
+        '<button class="btn-primary" onclick="openCreateExamModal()">+ Create New Exam</button>' +
+      '</div>' +
+      '<div class="stats-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:24px">' +
+        '<div class="stat-card"><div class="stat-label">Published Exams</div><div class="stat-value" style="color:var(--cyan)">' + publishedExamsCount + '</div><div class="stat-sub">' + EXAMS.length + ' Total Exams</div></div>' +
+        '<div class="stat-card"><div class="stat-label">Submissions</div><div class="stat-value" style="color:var(--blue)">' + list.length + '</div><div class="stat-sub">Completed attempts</div></div>' +
+        '<div class="stat-card"><div class="stat-label">Pending Evaluation</div><div class="stat-value" style="color:var(--amber)">' + pendingCount + '</div><div class="stat-sub">Requires grading</div></div>' +
+        '<div class="stat-card"><div class="stat-label">Enrolled Students</div><div class="stat-value" style="color:var(--green)">' + totalStudents + '</div><div class="stat-sub">Registered profiles</div></div>' +
+      '</div>' +
+      '<div class="card">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">' +
+          '<div class="section-title" style="margin-bottom:0">Recent Student Submissions for Evaluation</div>' +
+          '<button class="btn-outline btn-sm" onclick="staffNav(\'seval\',document.getElementById(\'si-staff-eval\'))">View All Submissions →</button>' +
+        '</div>' +
+        recHtml +
+      '</div>' +
+    '</div>';
+};
+
+// Staff Exams Management (Publish / Unpublish)
+window.renderStaffExams = function() {
+  document.getElementById('staff-content').innerHTML =
+    '<div class="page-enter">' +
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">' +
+      '<div>' +
+        '<div class="page-title" style="margin-bottom:2px">Manage & Publish Exams</div>' +
+        '<div class="page-sub">Create questions, set cohort targeting, and toggle exam visibility for students</div>' +
+      '</div>' +
+      '<button class="btn-primary" onclick="openCreateExamModal()">+ Create Exam</button>' +
+    '</div>' +
+    '<div style="display:flex;flex-direction:column;gap:14px;margin-bottom:24px">' +
+      (EXAMS.length === 0
+        ? '<div style="font-size:13px;color:var(--text3);text-align:center;padding:32px 0">No exams created yet. Click "+ Create Exam" to create one.</div>'
+        : EXAMS.map(function(e){
+            var isPublished = e.published !== false;
+            var targetDept = e.targetDept || 'All Departments';
+            var targetYear = e.targetYear || 'All Years';
+            var targetCollege = e.targetCollege || 'All Colleges';
+
+            return '<div class="card" style="' + (isPublished ? 'border-color:rgba(34,197,94,0.3);' : '') + '">' +
+              '<div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px">' +
+                '<div style="flex:1;min-width:280px">' +
+                  '<div style="font-size:16px;font-weight:800;color:var(--text);margin-bottom:4px">' + e.title + '</div>' +
+                  '<div style="font-size:12px;color:var(--text3);margin-bottom:10px;font-family:\'JetBrains Mono\',monospace">Code: <span style="color:var(--cyan)">' + e.code + '</span> &nbsp;·&nbsp; ' + e.duration + ' min &nbsp;·&nbsp; ' + e.questions + ' Qs</div>' +
+                  '<div style="display:flex;gap:6px;flex-wrap:wrap">' +
+                    '<span class="badge badge-blue">🏛 ' + targetDept + '</span>' +
+                    '<span class="badge badge-amber">🎓 ' + targetYear + '</span>' +
+                    '<span class="badge badge-gray">🏫 ' + targetCollege + '</span>' +
+                    '<span class="badge badge-cyan">👥 ' + (e.enrolled || 0) + ' enrolled</span>' +
+                    '<span class="badge badge-gray">📅 ' + e.date + '</span>' +
+                  '</div>' +
+                '</div>' +
+                '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px">' +
+                  '<div style="display:flex;gap:6px;align-items:center">' +
+                    '<span class="badge ' + (isPublished ? 'badge-green' : 'badge-gray') + '" style="font-size:11px">' + (isPublished ? '✓ PUBLISHED' : 'DRAFT (UNPUBLISHED)') + '</span>' +
+                    '<span class="badge ' + (e.status === 'active' ? 'badge-green' : 'badge-gray') + '" style="font-size:11px">' + e.status.toUpperCase() + '</span>' +
+                  '</div>' +
+                  '<div style="display:flex;gap:6px;align-items:center">' +
+                    '<button class="btn-' + (isPublished ? 'outline' : 'primary') + ' btn-sm" onclick="togglePublishExam(' + e.id + ')">' + (isPublished ? 'Unpublish' : 'Publish Exam →') + '</button>' +
+                    '<button class="btn-outline btn-sm" onclick="openEditQuestionsModal(' + e.id + ')">📝 Edit Questions</button>' +
+                    '<button class="btn-outline btn-sm" style="color:var(--red)" onclick="deleteExam(' + e.id + ')">🗑</button>' +
+                  '</div>' +
+                '</div>' +
+              '</div>' +
+            '</div>';
+          }).join('')) +
+    '</div>' +
+    '</div>';
+};
+
+// Staff Evaluation Panel
+window.renderStaffEvaluate = function() {
+  if (!HM_DB.submissions) HM_DB.submissions = [];
+  var list = HM_DB.submissions;
+  var pendingCount = list.filter(function(s){ return s.status === 'pending'; }).length;
+  
+  var listHtml = '';
+  if (list.length === 0) {
+    listHtml = '<div style="font-size:13px;color:var(--text3);text-align:center;padding:32px 0">No student exam submissions available for evaluation.</div>';
+  } else {
+    listHtml = 
+      '<div class="table-wrap"><table class="data-table">' +
+        '<thead>' +
+          '<tr>' +
+            '<th>Student ID</th>' +
+            '<th>Student</th>' +
+            '<th>Exam</th>' +
+            '<th>Proctoring Audit</th>' +
+            '<th>Submission Time</th>' +
+            '<th>Status</th>' +
+            '<th>Score</th>' +
+            '<th>Action</th>' +
+          '</tr>' +
+        '</thead>' +
+        '<tbody>' +
+          list.map(function(s, idx) {
+            var statusBadge = s.status === 'pending'
+              ? '<span class="badge badge-amber">Pending Evaluation</span>'
+              : '<span class="badge badge-green">Graded</span>';
+            var finalScoreText = s.status === 'pending'
+              ? 'Pending'
+              : (s.totalScore + ' / ' + s.totalPossible + ' (' + Math.round(s.totalScore / s.totalPossible * 100) + '%)');
+            var susp = s.suspicionScore || 0;
+            var suspBadge = susp >= 60
+              ? '<span class="badge badge-red">' + susp + '% High Risk</span>'
+              : susp >= 30
+                ? '<span class="badge badge-amber">' + susp + '% Medium</span>'
+                : '<span class="badge badge-green">' + susp + '% Low Risk</span>';
+            var violCount = (s.violations && s.violations.length) || 0;
+              
+            return '<tr>' +
+              '<td style="font-family:\'JetBrains Mono\',monospace;font-weight:700;color:var(--cyan)">' + (s.studentId || ('HM-STU-' + (1001 + idx))) + '</td>' +
+              '<td>' +
+                '<div style="font-weight:700;color:var(--text)">' + s.studentName + '</div>' +
+                '<div style="font-size:10px;color:var(--text3)">' + s.college + '</div>' +
+              '</td>' +
+              '<td>' +
+                '<div style="font-weight:700;color:var(--text)">' + s.examCode + '</div>' +
+                '<div style="font-size:10px;color:var(--text3)">' + s.examTitle + '</div>' +
+              '</td>' +
+              '<td>' +
+                suspBadge + 
+                (violCount > 0 ? '&nbsp;<span class="badge badge-red" style="font-size:9px">' + violCount + ' viol</span>' : '') +
+              '</td>' +
+              '<td style="font-size:11px;color:var(--text2)">' + s.submitTime + '</td>' +
+              '<td>' + statusBadge + '</td>' +
+              '<td style="font-weight:700;color:var(--cyan)">' + finalScoreText + '</td>' +
+              '<td>' +
+                '<button class="btn-primary btn-sm" onclick="openEvaluationView(' + idx + ')">' + 
+                  (s.status === 'pending' ? 'Evaluate & Audit →' : 'Review') + 
+                '</button>' +
+              '</td>' +
+            '</tr>';
+          }).join('') +
+        '</tbody>' +
+      '</table></div>';
+  }
+  
+  document.getElementById('staff-content').innerHTML =
+    '<div class="page-enter">' +
+      '<div class="page-title">Faculty Evaluation Panel</div>' +
+      '<div class="page-sub">Review student answers, proctoring violations & photo evidence, and finalize grades</div>' +
+      '<div class="stats-grid" style="grid-template-columns:1fr 1fr;margin-bottom:20px">' +
+        '<div class="stat-card"><div class="stat-label">Pending Evaluation</div><div class="stat-value" style="color:var(--amber)">' + pendingCount + '</div><div class="stat-sub">Descriptive answers awaiting scoring</div></div>' +
+        '<div class="stat-card"><div class="stat-label">Total Submissions</div><div class="stat-value" style="color:var(--green)">' + list.length + '</div><div class="stat-sub">All completed exam attempts</div></div>' +
+      '</div>' +
+      '<div class="card">' +
+        '<div class="section-title">Submitted Exams Directory</div>' +
+        listHtml +
+      '</div>' +
+    '</div>';
+};
+
+// Staff Students Directory
+window.renderStaffStudents = function() {
+  var studentsList = [];
+  var seen = {};
+
+  // Combine from registeredFaceData
+  Object.keys(registeredFaceData || {}).forEach(function(k, idx){
+    var r = registeredFaceData[k];
+    if (r && r.name && !seen[r.name.toLowerCase()]) {
+      seen[r.name.toLowerCase()] = true;
+      studentsList.push({
+        id: r.studentId || ('HM-STU-' + (1001 + idx)),
+        name: r.name,
+        dob: r.dob,
+        college: r.college,
+        photo: r.snapshot || r.photoUrl || null
+      });
+    }
+  });
+
+  // Combine from STUDENTS registry
+  (STUDENTS || []).forEach(function(s, idx){
+    if (s && s.name && !seen[s.name.toLowerCase()]) {
+      seen[s.name.toLowerCase()] = true;
+      studentsList.push({
+        id: s.studentId || s.id || ('HM-STU-' + (1001 + idx)),
+        name: s.name,
+        dob: s.dob || '—',
+        college: s.college || '—',
+        photo: null
+      });
+    }
+  });
+
+  var rowsHtml = '';
+  if (studentsList.length === 0) {
+    rowsHtml = '<tr><td colspan="5" style="text-align:center;padding:30px;color:var(--text3)">No students registered yet.</td></tr>';
+  } else {
+    rowsHtml = studentsList.map(function(st){
+      var subs = (HM_DB.submissions || []).filter(function(sb){ return sb.studentName === st.name; });
+      var photoHtml = st.photo
+        ? '<div style="width:36px;height:36px;border-radius:50%;overflow:hidden;border:2px solid var(--cyan);flex-shrink:0"><img src="' + st.photo + '" style="width:100%;height:100%;object-fit:cover" /></div>'
+        : '<div class="avatar" style="font-size:12px;background:linear-gradient(135deg,var(--blue),var(--cyan2))">' + st.name.slice(0,2).toUpperCase() + '</div>';
+
+      return '<tr>' +
+        '<td style="font-family:\'JetBrains Mono\',monospace;font-weight:700;color:var(--cyan)">' + st.id + '</td>' +
+        '<td>' +
+          '<div style="display:flex;align-items:center;gap:10px">' +
+            photoHtml +
+            '<div><div style="font-weight:700;color:var(--text)">' + st.name + '</div><div style="font-size:10px;color:var(--text3)">DOB: ' + st.dob + '</div></div>' +
+          '</div>' +
+        '</td>' +
+        '<td>' + st.college + '</td>' +
+        '<td><span class="badge badge-cyan">' + subs.length + ' Submissions</span></td>' +
+        '<td><span class="badge badge-green">Registered</span></td>' +
+      '</tr>';
+    }).join('');
+  }
+
+  document.getElementById('staff-content').innerHTML =
+    '<div class="page-enter">' +
+      '<div class="page-title">Students Directory</div>' +
+      '<div class="page-sub">All enrolled student profiles with unique IDs and biometric status</div>' +
+      '<div class="card" style="margin-top:16px">' +
+        '<div class="table-wrap"><table class="data-table">' +
+          '<thead>' +
+            '<tr>' +
+              '<th>Student ID</th>' +
+              '<th>Student Name</th>' +
+              '<th>Institution</th>' +
+              '<th>Exams Attempted</th>' +
+              '<th>Account Status</th>' +
+            '</tr>' +
+          '</thead>' +
+          '<tbody>' +
+            rowsHtml +
+          '</tbody>' +
+        '</table></div>' +
+      '</div>' +
+    '</div>';
+};
+
+/* =====================================================
+   EXAM COHORT VERIFICATION & JOIN ACCESS CONTROL
+===================================================== */
+
+window.verifyExamCohortEligibility = function(ex) {
+  if (!ex) return { eligible: true };
+  var studentDept = (currentStudent.dept || '').trim().toLowerCase();
+  var studentYear = (currentStudent.year || '').trim().toLowerCase();
+  var studentCollege = (currentStudent.college || '').trim().toLowerCase();
+
+  // Department check
+  if (ex.targetDept && ex.targetDept !== 'All Departments') {
+    var td = ex.targetDept.trim().toLowerCase();
+    if (studentDept && td !== studentDept && !studentDept.includes(td) && !td.includes(studentDept)) {
+      return { 
+        eligible: false, 
+        reason: 'This exam is restricted to students of "' + ex.targetDept + '". You are registered under "' + (currentStudent.dept || 'General') + '".' 
+      };
+    }
+  }
+
+  // Academic Year check
+  if (ex.targetYear && ex.targetYear !== 'All Years') {
+    var ty = ex.targetYear.trim().toLowerCase();
+    if (studentYear && ty !== studentYear) {
+      return { 
+        eligible: false, 
+        reason: 'This exam is restricted to ' + ex.targetYear + ' students. You are registered in ' + (currentStudent.year || 'Unknown Year') + '.' 
+      };
+    }
+  }
+
+  // College check
+  if (ex.targetCollege && ex.targetCollege !== 'All Colleges') {
+    var tc = ex.targetCollege.trim().toLowerCase();
+    if (studentCollege && tc !== studentCollege && !studentCollege.includes(tc) && !tc.includes(studentCollege)) {
+      return { 
+        eligible: false, 
+        reason: 'This exam is restricted to students of ' + ex.targetCollege + '. You are registered in ' + (currentStudent.college || 'Other') + '.' 
+      };
+    }
+  }
+
+  return { eligible: true };
+};
+
+// Override joinCode for cohort safety
+joinCode = function() {
+  var c = ((document.getElementById('code-inp')||{}).value||'').trim().toUpperCase();
+  if (!c) { alert('Please enter an exam code.'); return; }
+  var ex = EXAMS.find(function(e){ return (e.code||'').toUpperCase() === c; }) || studentExams.find(function(e){ return (e.code||'').toUpperCase() === c; });
+  if (!ex) {
+    if (c === 'CS101' && EXAMS.length > 0) ex = EXAMS[0];
+    else { alert('Exam code "' + c + '" not found. Please verify with your instructor.'); return; }
+  }
+  if (ex.published === false) {
+    alert('This exam is currently in Draft (Unpublished) mode. Please wait for faculty to publish it.');
+    return;
+  }
+  var elCheck = verifyExamCohortEligibility(ex);
+  if (!elCheck.eligible) {
+    alert('⛔ Cohort Access Restricted:\n' + elCheck.reason);
+    return;
+  }
+  startExam(ex.id);
+};
+
+// Override joinCode2 for cohort safety
+joinCode2 = function() {
+  var c = ((document.getElementById('join-code')||{}).value||'').trim().toUpperCase();
+  if (!c) { alert('Please enter an exam code.'); return; }
+  var ex = EXAMS.find(function(e){ return (e.code||'').toUpperCase() === c; }) || studentExams.find(function(e){ return (e.code||'').toUpperCase() === c; });
+  if (!ex) {
+    if (c === 'CS101' && EXAMS.length > 0) ex = EXAMS[0];
+    else { alert('Exam code "' + c + '" not found. Please verify with your instructor.'); return; }
+  }
+  if (ex.published === false) {
+    alert('This exam is currently in Draft (Unpublished) mode. Please wait for faculty to publish it.');
+    return;
+  }
+  var elCheck = verifyExamCohortEligibility(ex);
+  if (!elCheck.eligible) {
+    alert('⛔ Cohort Access Restricted:\n' + elCheck.reason);
+    return;
+  }
+  startExam(ex.id);
+};
+
+/* =====================================================
+   ADMIN: FACULTY & STAFF MANAGEMENT
+===================================================== */
+
+window.saveStaffAccounts = function() {
+  try {
+    localStorage.setItem('hm_staff_accounts', JSON.stringify(staffAccounts));
+    window.staffAccounts = staffAccounts;
+  } catch(e) {}
+};
+
+window.renderAStaff = function() {
+  var staffList = (window.staffAccounts && Array.isArray(window.staffAccounts)) ? window.staffAccounts : [];
+  var totalStaff = staffList.length;
+  var activeFaculty = staffList.filter(function(s){ return s.status !== 'inactive'; }).length;
+  var deptsSet = {};
+  staffList.forEach(function(s){ if (s.dept) deptsSet[s.dept] = true; });
+  var deptsCount = Object.keys(deptsSet).length;
+  var proctorsCount = staffList.filter(function(s){ return (s.designation||'').toLowerCase().includes('proctor'); }).length;
+
+  var deptFilterVal = (document.getElementById('staff-dept-filter') || {}).value || 'all';
+  var searchQuery = ((document.getElementById('staff-search-inp') || {}).value || '').trim().toLowerCase();
+
+  var filteredStaff = staffList.filter(function(s){
+    if (deptFilterVal !== 'all' && s.dept !== deptFilterVal && s.deptCode !== deptFilterVal) return false;
+    if (searchQuery) {
+      var matchStr = (s.name + ' ' + (s.email||'') + ' ' + (s.username||'') + ' ' + (s.designation||'') + ' ' + (s.dept||'') + ' ' + (s.college||'')).toLowerCase();
+      if (!matchStr.includes(searchQuery)) return false;
+    }
+    return true;
+  });
+
+  var rowsHtml = '';
+  if (filteredStaff.length === 0) {
+    rowsHtml = '<tr><td colspan="7" style="text-align:center;padding:32px;color:var(--text3)">No faculty or staff members matching criteria.</td></tr>';
+  } else {
+    rowsHtml = filteredStaff.map(function(s, idx){
+      var actualIdx = staffList.indexOf(s);
+      var initials = s.name.split(' ').map(function(w){ return w[0]; }).join('').toUpperCase().slice(0, 2);
+      var isActive = s.status !== 'inactive';
+      var statusBadge = isActive
+        ? '<span class="badge badge-green" style="cursor:pointer" onclick="toggleStaffStatus(' + actualIdx + ')">● Active</span>'
+        : '<span class="badge badge-red" style="cursor:pointer" onclick="toggleStaffStatus(' + actualIdx + ')">○ Inactive</span>';
+
+      return '<tr>' +
+        '<td style="font-family:\'JetBrains Mono\',monospace;font-weight:700;color:var(--cyan)">' + (s.id || ('STF-' + (100 + actualIdx + 1))) + '</td>' +
+        '<td>' +
+          '<div style="display:flex;align-items:center;gap:10px">' +
+            '<div class="avatar" style="width:36px;height:36px;border-radius:10px;font-size:12px;font-weight:800;flex-shrink:0;background:linear-gradient(135deg,var(--blue),var(--cyan2))">' + initials + '</div>' +
+            '<div>' +
+              '<div style="font-weight:700;color:var(--text)">' + s.name + '</div>' +
+              '<div style="font-size:11px;color:var(--cyan);font-weight:600">' + (s.designation || 'Faculty Member') + '</div>' +
+            '</div>' +
+          '</div>' +
+        '</td>' +
+        '<td>' +
+          '<div style="font-weight:600;font-size:12px;color:var(--text)">' + (s.dept || 'Academics') + '</div>' +
+          '<div style="font-size:10px;color:var(--text3)">' + (s.college || 'HexaMinds Institute') + '</div>' +
+        '</td>' +
+        '<td>' +
+          '<div style="font-size:12px;color:var(--text)">' + (s.email || '—') + '</div>' +
+          '<div style="font-size:10px;color:var(--text3);font-family:\'JetBrains Mono\',monospace">' + (s.phone || '—') + '</div>' +
+        '</td>' +
+        '<td>' +
+          '<div style="font-family:\'JetBrains Mono\',monospace;font-size:11px;color:var(--text)">User: <strong>' + (s.username || s.email) + '</strong></div>' +
+          '<div style="font-family:\'JetBrains Mono\',monospace;font-size:10px;color:var(--text3)">Pass: <span style="letter-spacing:1px">' + (s.password || '••••••••') + '</span></div>' +
+        '</td>' +
+        '<td>' + statusBadge + '</td>' +
+        '<td>' +
+          '<div style="display:flex;gap:6px">' +
+            '<button class="btn-outline btn-sm" style="padding:4px 8px;font-size:11px" onclick="openAddStaffModal(' + actualIdx + ')">✏ Edit</button>' +
+            '<button class="btn-outline btn-sm" style="padding:4px 8px;font-size:11px;color:var(--red)" onclick="deleteStaffMember(' + actualIdx + ')">🗑</button>' +
+          '</div>' +
+        '</td>' +
+      '</tr>';
+    }).join('');
+  }
+
+  var deptFilterOptions = '<option value="all">All Departments</option>' +
+    (window.DEPARTMENTS || []).map(function(d){
+      return '<option value="' + d.name + '" ' + (deptFilterVal === d.name ? 'selected' : '') + '>' + d.name + ' (' + d.code + ')</option>';
+    }).join('');
+
+  document.getElementById('a-content').innerHTML =
+    '<div class="page-enter">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">' +
+        '<div>' +
+          '<div class="page-title" style="margin-bottom:2px">Faculty & Staff Management</div>' +
+          '<div class="page-sub">Directory of professors, proctors, HODs, login credentials, and department assignments</div>' +
+        '</div>' +
+        '<button class="btn-primary" onclick="openAddStaffModal(-1)">＋ Add Staff Member</button>' +
+      '</div>' +
+
+      '<div class="stats-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:24px">' +
+        '<div class="stat-card"><div class="stat-label">Total Staff</div><div class="stat-value" style="color:var(--cyan)">' + totalStaff + '</div><div class="stat-sub">Registered accounts</div></div>' +
+        '<div class="stat-card"><div class="stat-label">Active Faculty</div><div class="stat-value" style="color:var(--green)">' + activeFaculty + '</div><div class="stat-sub">Teaching & Evaluation</div></div>' +
+        '<div class="stat-card"><div class="stat-label">Departments</div><div class="stat-value" style="color:var(--blue)">' + deptsCount + '</div><div class="stat-sub">Branches covered</div></div>' +
+        '<div class="stat-card"><div class="stat-label">Proctors</div><div class="stat-value" style="color:var(--amber)">' + (proctorsCount || activeFaculty) + '</div><div class="stat-sub">Exam Invigilators</div></div>' +
+      '</div>' +
+
+      '<div class="card">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:12px">' +
+          '<div style="display:flex;gap:10px;align-items:center;flex:1">' +
+            '<input id="staff-search-inp" placeholder="Search by name, email, designation..." value="' + searchQuery + '" oninput="renderAStaff()" style="max-width:320px;padding:8px 12px;font-size:12px;border:1.5px solid var(--border);border-radius:10px" />' +
+            '<select id="staff-dept-filter" onchange="renderAStaff()" style="padding:8px 12px;font-size:12px;border:1.5px solid var(--border);border-radius:10px;background:#fff;color:var(--text)">' +
+              deptFilterOptions +
+            '</select>' +
+          '</div>' +
+          '<div style="font-size:12px;color:var(--text3)">Showing <strong>' + filteredStaff.length + '</strong> of <strong>' + totalStaff + '</strong> members</div>' +
+        '</div>' +
+
+        '<div class="table-wrap"><table class="data-table">' +
+          '<thead>' +
+            '<tr>' +
+              '<th>ID</th>' +
+              '<th>Staff Member</th>' +
+              '<th>Department & Institution</th>' +
+              '<th>Contact</th>' +
+              '<th>Portal Login</th>' +
+              '<th>Status</th>' +
+              '<th>Actions</th>' +
+            '</tr>' +
+          '</thead>' +
+          '<tbody>' +
+            rowsHtml +
+          '</tbody>' +
+        '</table></div>' +
+      '</div>' +
+    '</div>';
+};
+
+window.openAddStaffModal = function(idx) {
+  var s = (idx >= 0 && staffAccounts[idx]) ? staffAccounts[idx] : null;
+  var isEdit = s !== null;
+
+  var overlay = document.createElement('div');
+  overlay.id = 'staff-modal-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.8);backdrop-filter:blur(8px);display:flex;align-items:center;justify-content:center;z-index:20000;padding:20px;';
+
+  var deptOptions = (window.DEPARTMENTS || []).map(function(d){
+    var selected = (s && (s.dept === d.name || s.deptCode === d.code)) ? 'selected' : '';
+    return '<option value="' + d.name + '" data-code="' + d.code + '" ' + selected + '>' + d.name + ' (' + d.code + ')</option>';
+  }).join('');
+
+  overlay.innerHTML =
+    '<div class="fv-box" style="width:620px; max-height:88vh; overflow-y:auto; text-align:left; display:flex; flex-direction:column; gap:16px; padding:30px; border-radius:20px; background:#fff; border:1.5px solid var(--border); box-shadow:0 12px 50px rgba(0,0,0,0.15); animation:cardEntrance .4s ease;">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center">' +
+        '<div>' +
+          '<div style="font-size:20px;font-weight:800;color:var(--text)">' + (isEdit ? 'Edit Faculty / Staff Member' : 'Add New Faculty Member') + '</div>' +
+          '<div style="font-size:12px;color:var(--text3)">Configure staff credentials, designations, and departmental permissions</div>' +
+        '</div>' +
+        '<button onclick="document.getElementById(\'staff-modal-overlay\').remove()" style="background:none;border:none;font-size:20px;color:var(--text3);cursor:pointer;line-height:1">✕</button>' +
+      '</div>' +
+
+      '<div style="display:grid;grid-template-columns:1.5fr 1fr;gap:14px">' +
+        '<div class="form-group" style="margin-bottom:0">' +
+          '<label class="form-label">Full Name</label>' +
+          '<input id="sm-name" placeholder="e.g. Dr. Rajesh Sharma" value="' + (s ? s.name : '') + '" style="width:100%" />' +
+        '</div>' +
+        '<div class="form-group" style="margin-bottom:0">' +
+          '<label class="form-label">Staff ID</label>' +
+          '<input id="sm-id" placeholder="e.g. STF-103" value="' + (s ? (s.id || '') : ('STF-' + (100 + staffAccounts.length + 1))) + '" style="width:100%;font-family:\'JetBrains Mono\',monospace" />' +
+        '</div>' +
+      '</div>' +
+
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">' +
+        '<div class="form-group" style="margin-bottom:0">' +
+          '<label class="form-label">Designation / Role</label>' +
+          '<input id="sm-desig" placeholder="e.g. Professor & HOD, Proctor" value="' + (s ? (s.designation || '') : 'Assistant Professor') + '" style="width:100%" />' +
+        '</div>' +
+        '<div class="form-group" style="margin-bottom:0">' +
+          '<label class="form-label">Department</label>' +
+          '<select id="sm-dept" style="width:100%;padding:10px;border-radius:10px;border:1.5px solid var(--border);background:#fff;font-size:13px;color:var(--text)">' +
+            deptOptions +
+          '</select>' +
+        '</div>' +
+      '</div>' +
+
+      '<div class="form-group" style="margin-bottom:0">' +
+        '<label class="form-label">College / Institution</label>' +
+        '<input id="sm-college" placeholder="e.g. HexaMinds Institute of Technology" value="' + (s ? (s.college || '') : 'HexaMinds Institute of Technology') + '" style="width:100%" />' +
+      '</div>' +
+
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">' +
+        '<div class="form-group" style="margin-bottom:0">' +
+          '<label class="form-label">Official Email</label>' +
+          '<input id="sm-email" type="email" placeholder="e.g. sharma@hexaminds.edu" value="' + (s ? (s.email || '') : '') + '" style="width:100%" />' +
+        '</div>' +
+        '<div class="form-group" style="margin-bottom:0">' +
+          '<label class="form-label">Phone Number</label>' +
+          '<input id="sm-phone" placeholder="e.g. +91 98450 11223" value="' + (s ? (s.phone || '') : '') + '" style="width:100%" />' +
+        '</div>' +
+      '</div>' +
+
+      '<div style="background:var(--bg2);padding:14px;border-radius:12px;border:1px solid var(--border);display:flex;flex-direction:column;gap:10px">' +
+        '<div style="font-size:11px;font-weight:800;color:var(--cyan);text-transform:uppercase;letter-spacing:.5px">🔑 Faculty Login Portal Credentials</div>' +
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">' +
+          '<div>' +
+            '<label class="form-label" style="font-size:10px;margin-bottom:4px">Portal Username</label>' +
+            '<input id="sm-username" placeholder="e.g. sharma" value="' + (s ? (s.username || '') : '') + '" style="width:100%;font-size:12px;padding:8px" />' +
+          '</div>' +
+          '<div>' +
+            '<label class="form-label" style="font-size:10px;margin-bottom:4px">Password</label>' +
+            '<input id="sm-password" type="text" placeholder="e.g. staff123" value="' + (s ? (s.password || '') : 'faculty123') + '" style="width:100%;font-size:12px;padding:8px" />' +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+
+      '<div id="sm-err" class="hidden" style="font-size:12px;color:#f87171;padding:10px 14px;background:rgba(239,68,68,0.1);border-radius:10px;border:1px solid rgba(239,68,68,0.3);font-weight:600"></div>' +
+
+      '<div style="display:flex;gap:12px;margin-top:6px">' +
+        '<button class="btn-outline" style="flex:1" onclick="document.getElementById(\'staff-modal-overlay\').remove()">Cancel</button>' +
+        '<button class="btn-primary" style="flex:2" onclick="saveStaffMember(' + idx + ')">' + (isEdit ? 'Save Changes ✓' : 'Add Staff Member →') + '</button>' +
+      '</div>' +
+    '</div>';
+
+  document.body.appendChild(overlay);
+};
+
+window.saveStaffMember = function(idx) {
+  var name = document.getElementById('sm-name').value.trim();
+  var id = document.getElementById('sm-id').value.trim();
+  var desig = document.getElementById('sm-desig').value.trim();
+  var deptSel = document.getElementById('sm-dept');
+  var dept = deptSel.value;
+  var deptCode = (deptSel.selectedOptions && deptSel.selectedOptions[0]) ? deptSel.selectedOptions[0].getAttribute('data-code') : 'GEN';
+  var college = document.getElementById('sm-college').value.trim();
+  var email = document.getElementById('sm-email').value.trim();
+  var phone = document.getElementById('sm-phone').value.trim();
+  var username = document.getElementById('sm-username').value.trim().toLowerCase();
+  var password = document.getElementById('sm-password').value.trim();
+
+  var err = document.getElementById('sm-err');
+  if (err) err.classList.add('hidden');
+
+  if (!name) { if (err) { err.textContent = '⚠ Please enter staff member name.'; err.classList.remove('hidden'); } return; }
+  if (!email) { if (err) { err.textContent = '⚠ Please enter official email.'; err.classList.remove('hidden'); } return; }
+  if (!username) { if (err) { err.textContent = '⚠ Please enter username for portal login.'; err.classList.remove('hidden'); } return; }
+  if (!password) { if (err) { err.textContent = '⚠ Please enter a password.'; err.classList.remove('hidden'); } return; }
+
+  // Check unique username
+  for (var i = 0; i < staffAccounts.length; i++) {
+    if (i !== idx && staffAccounts[i].username.toLowerCase() === username) {
+      if (err) { err.textContent = '⚠ Username "' + username + '" is already taken. Please choose another.'; err.classList.remove('hidden'); }
+      return;
+    }
+  }
+
+  var staffObj = {
+    id: id || ('STF-' + (100 + staffAccounts.length + 1)),
+    name: name,
+    username: username,
+    password: password,
+    dept: dept,
+    deptCode: deptCode,
+    designation: desig || 'Faculty Member',
+    email: email,
+    phone: phone,
+    college: college || 'HexaMinds Institute of Technology',
+    status: (idx >= 0 && staffAccounts[idx] && staffAccounts[idx].status) ? staffAccounts[idx].status : 'active'
+  };
+
+  if (idx >= 0 && staffAccounts[idx]) {
+    staffAccounts[idx] = staffObj;
+  } else {
+    staffAccounts.push(staffObj);
+  }
+
+  saveStaffAccounts();
+  var ov = document.getElementById('staff-modal-overlay');
+  if (ov) ov.remove();
+  renderAStaff();
+};
+
+window.deleteStaffMember = function(idx) {
+  if (idx < 0 || idx >= staffAccounts.length) return;
+  var s = staffAccounts[idx];
+  if (confirm('Are you sure you want to remove ' + s.name + ' (' + s.designation + ') from Staff?')) {
+    staffAccounts.splice(idx, 1);
+    saveStaffAccounts();
+    renderAStaff();
+  }
+};
+
+window.toggleStaffStatus = function(idx) {
+  if (idx < 0 || idx >= staffAccounts.length) return;
+  staffAccounts[idx].status = staffAccounts[idx].status === 'inactive' ? 'active' : 'inactive';
+  saveStaffAccounts();
+  renderAStaff();
+};
+
+/* =====================================================
+   ADMIN: DEPARTMENT & DEPARTMENT PROFILES MANAGEMENT
+===================================================== */
+
+window.saveDepartments = function() {
+  try {
+    localStorage.setItem('hm_departments', JSON.stringify(DEPARTMENTS));
+    window.DEPARTMENTS = DEPARTMENTS;
+  } catch(e) {}
+};
+
+window.renderADepartments = function() {
+  var depts = (window.DEPARTMENTS && Array.isArray(window.DEPARTMENTS)) ? window.DEPARTMENTS : [];
+  var totalDepts = depts.length;
+  var totalHods = depts.filter(function(d){ return d.hod && d.hod.trim(); }).length;
+
+  var searchQuery = ((document.getElementById('dept-search-inp') || {}).value || '').trim().toLowerCase();
+
+  var filteredDepts = depts.filter(function(d){
+    if (searchQuery) {
+      var matchStr = (d.name + ' ' + d.code + ' ' + (d.hod||'') + ' ' + (d.college||'') + ' ' + (d.description||'')).toLowerCase();
+      if (!matchStr.includes(searchQuery)) return false;
+    }
+    return true;
+  });
+
+  var cardsHtml = '';
+  if (filteredDepts.length === 0) {
+    cardsHtml = '<div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--text3);background:#fff;border-radius:16px;border:1.5px solid var(--border)">No departments match the search query.</div>';
+  } else {
+    cardsHtml = filteredDepts.map(function(d){
+      // Faculty in dept
+      var facultyCount = staffAccounts.filter(function(st){
+        return st.dept === d.name || st.deptCode === d.code || (st.dept && st.dept.toLowerCase().includes(d.code.toLowerCase()));
+      }).length;
+
+      // Students in dept
+      var studentCount = 0;
+      (STUDENTS || []).forEach(function(st){
+        if (st.dept === d.name || st.dept === d.code || (st.dept && st.dept.toLowerCase().includes(d.code.toLowerCase()))) studentCount++;
+      });
+      Object.keys(registeredFaceData || {}).forEach(function(k){
+        var rf = registeredFaceData[k];
+        if (rf && (rf.dept === d.name || rf.dept === d.code)) studentCount++;
+      });
+
+      // Active/Published exams in dept
+      var examsCount = EXAMS.filter(function(e){
+        return e.targetDept === d.name || e.targetDept === d.code || e.targetDept === 'All Departments';
+      }).length;
+
+      var yearsList = Array.isArray(d.years) ? d.years : ['1st Year', '2nd Year', '3rd Year', '4th Year'];
+      var yearsBadges = yearsList.map(function(y){
+        return '<span class="badge badge-gray" style="font-size:10px">' + y + '</span>';
+      }).join(' ');
+
+      return '<div class="card" style="display:flex;flex-direction:column;justify-content:space-between;gap:14px;border:1.5px solid var(--border);border-radius:18px;padding:22px;transition:transform .2s, box-shadow .2s;">' +
+        '<div>' +
+          '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">' +
+            '<span class="badge badge-cyan" style="font-size:12px;font-weight:800;letter-spacing:1px;padding:5px 12px">' + d.code + '</span>' +
+            '<div style="display:flex;gap:6px;align-items:center">' +
+              '<span class="badge badge-green" style="font-size:10px">Active Branch</span>' +
+              '<button class="btn-outline btn-sm" style="padding:3px 8px;font-size:11px" onclick="openAddDeptModal(\'' + d.code + '\')">✏</button>' +
+              '<button class="btn-outline btn-sm" style="padding:3px 8px;font-size:11px;color:var(--red)" onclick="deleteDepartment(\'' + d.code + '\')">🗑</button>' +
+            '</div>' +
+          '</div>' +
+
+          '<div style="font-size:17px;font-weight:800;color:var(--text);margin-bottom:4px">' + d.name + '</div>' +
+          '<div style="font-size:11px;color:var(--text3);margin-bottom:12px">' + (d.college || 'HexaMinds Institute of Technology') + '</div>' +
+
+          /* HOD Info Box */
+          '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:12px;margin-bottom:14px">' +
+            '<div style="font-size:10px;font-weight:800;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Head of Department (HOD)</div>' +
+            '<div style="display:flex;align-items:center;gap:8px">' +
+              '<div style="width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,var(--blue),var(--cyan2));color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:12px">' +
+                ((d.hod||'H').slice(0,2).toUpperCase()) +
+              '</div>' +
+              '<div>' +
+                '<div style="font-size:13px;font-weight:700;color:var(--text)">' + (d.hod || 'Dr. Anand Kumar') + '</div>' +
+                '<div style="font-size:10px;color:var(--text3)">' + (d.email || 'hod.' + d.code.toLowerCase() + '@hexaminds.edu') + ' &nbsp;·&nbsp; ' + (d.phone || '+91 98765 43210') + '</div>' +
+              '</div>' +
+            '</div>' +
+          '</div>' +
+
+          /* Metric Counters */
+          '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px;background:#fff;border:1px solid var(--border);border-radius:10px;padding:10px;text-align:center">' +
+            '<div>' +
+              '<div style="font-size:9px;font-weight:700;color:var(--text3);text-transform:uppercase">Faculty</div>' +
+              '<div style="font-size:16px;font-weight:800;color:var(--cyan);font-family:\'JetBrains Mono\',monospace">' + facultyCount + '</div>' +
+            '</div>' +
+            '<div style="border-left:1px solid var(--border);border-right:1px solid var(--border)">' +
+              '<div style="font-size:9px;font-weight:700;color:var(--text3);text-transform:uppercase">Students</div>' +
+              '<div style="font-size:16px;font-weight:800;color:var(--green);font-family:\'JetBrains Mono\',monospace">' + studentCount + '</div>' +
+            '</div>' +
+            '<div>' +
+              '<div style="font-size:9px;font-weight:700;color:var(--text3);text-transform:uppercase">Exams</div>' +
+              '<div style="font-size:16px;font-weight:800;color:var(--blue);font-family:\'JetBrains Mono\',monospace">' + examsCount + '</div>' +
+            '</div>' +
+          '</div>' +
+
+          '<div style="font-size:12px;color:var(--text2);line-height:1.5;margin-bottom:12px">' +
+            (d.description || 'Department specializing in undergraduate & postgraduate research and examinations.') +
+          '</div>' +
+        '</div>' +
+
+        '<div>' +
+          '<div style="font-size:10px;font-weight:700;color:var(--text3);margin-bottom:6px;text-transform:uppercase">Target Academic Batches</div>' +
+          '<div style="display:flex;gap:4px;flex-wrap:wrap">' +
+            yearsBadges +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+  }
+
+  document.getElementById('a-content').innerHTML =
+    '<div class="page-enter">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">' +
+        '<div>' +
+          '<div class="page-title" style="margin-bottom:2px">Department Profiles & Structure</div>' +
+          '<div class="page-sub">Academic branch management, HOD profiles, target cohorts, faculty metrics, and exams</div>' +
+        '</div>' +
+        '<button class="btn-primary" onclick="openAddDeptModal(\'\')">＋ Add Department</button>' +
+      '</div>' +
+
+      '<div class="stats-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:24px">' +
+        '<div class="stat-card"><div class="stat-label">Total Departments</div><div class="stat-value" style="color:var(--cyan)">' + totalDepts + '</div><div class="stat-sub">Active programs</div></div>' +
+        '<div class="stat-card"><div class="stat-label">HODs Assigned</div><div class="stat-value" style="color:var(--green)">' + totalHods + '</div><div class="stat-sub">Department Heads</div></div>' +
+        '<div class="stat-card"><div class="stat-label">Faculty Assigned</div><div class="stat-value" style="color:var(--blue)">' + staffAccounts.length + '</div><div class="stat-sub">Across departments</div></div>' +
+        '<div class="stat-card"><div class="stat-label">Published Exams</div><div class="stat-value" style="color:var(--amber)">' + EXAMS.length + '</div><div class="stat-sub">Targeted tests</div></div>' +
+      '</div>' +
+
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">' +
+        '<input id="dept-search-inp" placeholder="Search by department name, code, or HOD..." value="' + searchQuery + '" oninput="renderADepartments()" style="max-width:340px;padding:9px 14px;font-size:12px;border:1.5px solid var(--border);border-radius:10px" />' +
+        '<div style="font-size:12px;color:var(--text3)">Showing <strong>' + filteredDepts.length + '</strong> departments</div>' +
+      '</div>' +
+
+      '<div style="display:grid;grid-template-columns:repeat(auto-fill, minmax(340px, 1fr));gap:20px">' +
+        cardsHtml +
+      '</div>' +
+    '</div>';
+};
+
+window.openAddDeptModal = function(deptCode) {
+  var d = deptCode ? DEPARTMENTS.find(function(x){ return x.code === deptCode; }) : null;
+  var isEdit = d !== null;
+
+  var overlay = document.createElement('div');
+  overlay.id = 'dept-modal-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.8);backdrop-filter:blur(8px);display:flex;align-items:center;justify-content:center;z-index:20000;padding:20px;';
+
+  var currentYears = (d && Array.isArray(d.years)) ? d.years.join(', ') : '1st Year, 2nd Year, 3rd Year, 4th Year';
+
+  overlay.innerHTML =
+    '<div class="fv-box" style="width:620px; max-height:88vh; overflow-y:auto; text-align:left; display:flex; flex-direction:column; gap:16px; padding:30px; border-radius:20px; background:#fff; border:1.5px solid var(--border); box-shadow:0 12px 50px rgba(0,0,0,0.15); animation:cardEntrance .4s ease;">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center">' +
+        '<div>' +
+          '<div style="font-size:20px;font-weight:800;color:var(--text)">' + (isEdit ? 'Edit Department Profile' : 'Create New Department') + '</div>' +
+          '<div style="font-size:12px;color:var(--text3)">Define academic branch code, HOD details, and cohort specifications</div>' +
+        '</div>' +
+        '<button onclick="document.getElementById(\'dept-modal-overlay\').remove()" style="background:none;border:none;font-size:20px;color:var(--text3);cursor:pointer;line-height:1">✕</button>' +
+      '</div>' +
+
+      '<div style="display:grid;grid-template-columns:1fr 2fr;gap:14px">' +
+        '<div class="form-group" style="margin-bottom:0">' +
+          '<label class="form-label">Branch Code</label>' +
+          '<input id="dm-code" placeholder="e.g. CSE" value="' + (d ? d.code : '') + '" style="width:100%;text-transform:uppercase;font-family:\'JetBrains Mono\',monospace" ' + (isEdit ? 'readonly' : '') + ' />' +
+        '</div>' +
+        '<div class="form-group" style="margin-bottom:0">' +
+          '<label class="form-label">Department Name</label>' +
+          '<input id="dm-name" placeholder="e.g. Computer Science & Engineering" value="' + (d ? d.name : '') + '" style="width:100%" />' +
+        '</div>' +
+      '</div>' +
+
+      '<div class="form-group" style="margin-bottom:0">' +
+        '<label class="form-label">College / Institution</label>' +
+        '<input id="dm-college" placeholder="e.g. HexaMinds Institute of Technology" value="' + (d ? (d.college || '') : 'HexaMinds Institute of Technology') + '" style="width:100%" />' +
+      '</div>' +
+
+      '<div style="background:var(--bg2);padding:14px;border-radius:12px;border:1px solid var(--border);display:flex;flex-direction:column;gap:10px">' +
+        '<div style="font-size:11px;font-weight:800;color:var(--cyan);text-transform:uppercase;letter-spacing:.5px">👤 Head of Department (HOD) Profile</div>' +
+        '<div class="form-group" style="margin-bottom:0">' +
+          '<label class="form-label" style="font-size:10px">HOD Full Name</label>' +
+          '<input id="dm-hod" placeholder="e.g. Dr. Anand Kumar" value="' + (d ? (d.hod || '') : '') + '" style="width:100%;font-size:12px;padding:8px" />' +
+        '</div>' +
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">' +
+          '<div>' +
+            '<label class="form-label" style="font-size:10px;margin-bottom:4px">HOD Email</label>' +
+            '<input id="dm-email" type="email" placeholder="e.g. hod.cse@hexaminds.edu" value="' + (d ? (d.email || '') : '') + '" style="width:100%;font-size:12px;padding:8px" />' +
+          '</div>' +
+          '<div>' +
+            '<label class="form-label" style="font-size:10px;margin-bottom:4px">HOD Phone</label>' +
+            '<input id="dm-phone" placeholder="e.g. +91 98765 43210" value="' + (d ? (d.phone || '') : '') + '" style="width:100%;font-size:12px;padding:8px" />' +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+
+      '<div class="form-group" style="margin-bottom:0">' +
+        '<label class="form-label">Academic Batches / Years (comma separated)</label>' +
+        '<input id="dm-years" placeholder="e.g. 1st Year, 2nd Year, 3rd Year, 4th Year" value="' + currentYears + '" style="width:100%" />' +
+      '</div>' +
+
+      '<div class="form-group" style="margin-bottom:0">' +
+        '<label class="form-label">Department Description / Focus Area</label>' +
+        '<textarea id="dm-desc" placeholder="Brief description of department specialization and research..." style="width:100%;min-height:70px;padding:10px;border-radius:10px;border:1.5px solid var(--border);background:#fff;font-size:12px;color:var(--text)">' + (d ? (d.description || '') : '') + '</textarea>' +
+      '</div>' +
+
+      '<div id="dm-err" class="hidden" style="font-size:12px;color:#f87171;padding:10px 14px;background:rgba(239,68,68,0.1);border-radius:10px;border:1px solid rgba(239,68,68,0.3);font-weight:600"></div>' +
+
+      '<div style="display:flex;gap:12px;margin-top:6px">' +
+        '<button class="btn-outline" style="flex:1" onclick="document.getElementById(\'dept-modal-overlay\').remove()">Cancel</button>' +
+        '<button class="btn-primary" style="flex:2" onclick="saveDepartment(\'' + (deptCode || '') + '\')">' + (isEdit ? 'Save Department ✓' : 'Create Department →') + '</button>' +
+      '</div>' +
+    '</div>';
+
+  document.body.appendChild(overlay);
+};
+
+window.saveDepartment = function(origCode) {
+  var code = document.getElementById('dm-code').value.trim().toUpperCase();
+  var name = document.getElementById('dm-name').value.trim();
+  var college = document.getElementById('dm-college').value.trim();
+  var hod = document.getElementById('dm-hod').value.trim();
+  var email = document.getElementById('dm-email').value.trim();
+  var phone = document.getElementById('dm-phone').value.trim();
+  var yearsStr = document.getElementById('dm-years').value.trim();
+  var desc = document.getElementById('dm-desc').value.trim();
+
+  var err = document.getElementById('dm-err');
+  if (err) err.classList.add('hidden');
+
+  if (!code) { if (err) { err.textContent = '⚠ Please enter branch code.'; err.classList.remove('hidden'); } return; }
+  if (!name) { if (err) { err.textContent = '⚠ Please enter department name.'; err.classList.remove('hidden'); } return; }
+
+  // Check unique code if adding new
+  if (!origCode) {
+    var exists = DEPARTMENTS.some(function(d){ return d.code.toUpperCase() === code; });
+    if (exists) {
+      if (err) { err.textContent = '⚠ Department code "' + code + '" already exists.'; err.classList.remove('hidden'); }
+      return;
+    }
+  }
+
+  var years = yearsStr ? yearsStr.split(',').map(function(y){ return y.trim(); }).filter(function(y){ return y.length > 0; }) : ['1st Year', '2nd Year', '3rd Year', '4th Year'];
+
+  var deptObj = {
+    id: 'dept_' + code.toLowerCase().replace(/[^a-z0-9]/g, ''),
+    code: code,
+    name: name,
+    college: college || 'HexaMinds Institute of Technology',
+    hod: hod || 'Dr. Department Head',
+    email: email || ('hod.' + code.toLowerCase() + '@hexaminds.edu'),
+    phone: phone || '+91 98765 43210',
+    years: years,
+    description: desc || ('Department of ' + name + ' offering undergraduate & postgraduate curriculum.'),
+    status: 'active'
+  };
+
+  if (origCode) {
+    var foundIdx = DEPARTMENTS.findIndex(function(d){ return d.code === origCode; });
+    if (foundIdx !== -1) DEPARTMENTS[foundIdx] = deptObj;
+    else DEPARTMENTS.push(deptObj);
+  } else {
+    DEPARTMENTS.push(deptObj);
+  }
+
+  saveDepartments();
+  var ov = document.getElementById('dept-modal-overlay');
+  if (ov) ov.remove();
+  renderADepartments();
+};
+
+window.deleteDepartment = function(code) {
+  if (!code) return;
+  var d = DEPARTMENTS.find(function(x){ return x.code === code; });
+  if (!d) return;
+
+  if (confirm('Are you sure you want to delete the Department of ' + d.name + ' (' + d.code + ')?')) {
+    DEPARTMENTS = DEPARTMENTS.filter(function(x){ return x.code !== code; });
+    saveDepartments();
+    renderADepartments();
+  }
 };

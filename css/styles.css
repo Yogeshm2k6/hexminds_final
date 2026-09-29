@@ -479,3 +479,29 @@ tr:hover td{background:#fafbff}
   animation:fadeInUp .3s ease;letter-spacing:.3px;
   box-shadow:0 4px 16px rgba(217,119,6,0.35);
 }
+
+/* Impersonation / Proxy Candidate Alert */
+.cam-feed.impersonation-alert {
+  border-color: #dc2626 !important;
+  box-shadow: 0 0 0 3px rgba(220,38,38,0.3), 0 0 25px rgba(220,38,38,0.45) !important;
+  animation: violationShake 0.5s ease;
+}
+.cam-feed.impersonation-alert #cam-viol-bar {
+  display: block !important;
+  background: #dc2626 !important;
+}
+
+/* Violation mini card on dashboard */
+.viol-card-mini {
+  padding: 10px 12px;
+  background: rgba(239, 68, 68, 0.04);
+  border: 1px solid rgba(239, 68, 68, 0.12);
+  border-radius: 10px;
+  margin-bottom: 8px;
+  transition: all 0.2s ease;
+}
+.viol-card-mini:hover {
+  background: rgba(239, 68, 68, 0.08);
+  border-color: rgba(239, 68, 68, 0.25);
+  transform: translateY(-1px);
+}
