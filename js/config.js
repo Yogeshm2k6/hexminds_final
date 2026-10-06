@@ -25,7 +25,7 @@
     },
     // InsightFace ArcFace Biometrics Backend
     BIOMETRICS: {
-      baseUrl: "http://127.0.0.1:5000",
+      baseUrl: "https://hexminds-final-backend.onrender.com",
       registerEndpoint: "/api/biometrics/register",
       verifyEndpoint: "/api/biometrics/verify",
       healthEndpoint: "/api/biometrics/health"
