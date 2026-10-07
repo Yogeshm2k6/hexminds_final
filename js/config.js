@@ -73,6 +73,9 @@
                 window.HM_CONFIG.FIREBASE.apiKey = val;
               } else if (key === 'FIREBASE_PROJECT_ID') {
                 window.HM_CONFIG.FIREBASE.projectId = val;
+              } else if (key === 'BIOMETRICS_SERVICE_URL') {
+                window.HM_CONFIG.BIOMETRICS.baseUrl = val.replace(/\/+$/, '');
+                window.ENV.BIOMETRICS_URL = val.replace(/\/+$/, '');
               }
             }
           });

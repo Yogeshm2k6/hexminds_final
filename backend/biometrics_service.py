@@ -66,6 +66,33 @@ if os.path.exists(ENV_FILE):
     except Exception as e:
         print(f"Notice reading .env: {e}")
 
+# Check os.environ overrides (critical for cloud hosts like Render / Railway)
+if "PORT" in os.environ:
+    try:
+        config["service_port"] = int(os.environ["PORT"])
+    except ValueError:
+        pass
+if "BIOMETRICS_SERVICE_PORT" in os.environ:
+    try:
+        config["service_port"] = int(os.environ["BIOMETRICS_SERVICE_PORT"])
+    except ValueError:
+        pass
+if "ARCFACE_MATCH_THRESHOLD" in os.environ:
+    try:
+        config["arcface_match_threshold"] = float(os.environ["ARCFACE_MATCH_THRESHOLD"])
+    except ValueError:
+        pass
+if "LIVENESS_THRESHOLD" in os.environ:
+    try:
+        config["liveness_threshold"] = float(os.environ["LIVENESS_THRESHOLD"])
+    except ValueError:
+        pass
+if "CONSISTENCY_FRAMES" in os.environ:
+    try:
+        config["consistency_frames"] = int(os.environ["CONSISTENCY_FRAMES"])
+    except ValueError:
+        pass
+
 # Load or Initialize Vault
 embeddings_vault = {}
 if os.path.exists(VAULT_FILE):
@@ -165,6 +192,22 @@ def compute_match_percentage(sim):
 # =====================================================
 # API ENDPOINTS
 # =====================================================
+
+@app.route("/", methods=["GET"])
+def root_index():
+    return jsonify({
+        "status": "online",
+        "service": "HexaMinds Biometrics Verification Engine",
+        "version": "1.0.0",
+        "engine": "InsightFace + ArcFace (512-D)",
+        "endpoints": {
+            "health": "/api/biometrics/health",
+            "register": "/api/biometrics/register",
+            "verify": "/api/biometrics/verify",
+            "config": "/api/biometrics/config"
+        }
+    })
+
 
 @app.route("/api/biometrics/health", methods=["GET"])
 def health():
@@ -485,6 +528,6 @@ def verify_live():
 
 
 if __name__ == "__main__":
-    port = int(config.get("service_port", 5000))
+    port = int(os.environ.get("PORT", config.get("service_port", 5000)))
     print(f"Starting HexaMinds Biometrics Verification Server on port {port}...")
     app.run(host="0.0.0.0", port=port, debug=False)
