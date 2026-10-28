@@ -186,6 +186,14 @@ function staffLogin() {
 
   if (staff) {
     currentStaff = staff;
+    role = 'staff';
+    try {
+      localStorage.setItem('hm_active_session', JSON.stringify({
+        role: 'staff',
+        staff: staff,
+        loginTime: Date.now()
+      }));
+    } catch(e) {}
     document.getElementById('login-page').classList.add('hidden');
     document.getElementById('staff-app').classList.remove('hidden');
     var navInfo = document.getElementById('staff-nav-info');
@@ -625,6 +633,13 @@ function adminLogin() {
   var u = document.getElementById('a-user').value.trim();
   var p = document.getElementById('a-pass').value;
   if (u === 'hexaminds' && p === 'hexaminds123') {
+    role = 'admin';
+    try {
+      localStorage.setItem('hm_active_session', JSON.stringify({
+        role: 'admin',
+        loginTime: Date.now()
+      }));
+    } catch(e) {}
     document.getElementById('login-page').classList.add('hidden');
     document.getElementById('admin-app').classList.remove('hidden');
     renderADash();
@@ -654,6 +669,7 @@ function logout() {
   }
   currentStudent = {};
   currentStaff = null;
+  try { localStorage.removeItem('hm_active_session'); } catch(e) {}
 
   document.getElementById('login-page').classList.remove('hidden');
   ['student-app','staff-app','admin-app','face-verify-overlay'].forEach(function(id){

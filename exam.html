@@ -1517,6 +1517,7 @@ function logout() {
     LIVE_SESSIONS[currentStudent.name].status = 'offline';
   }
   currentStudent = {};
+  try { localStorage.removeItem('hm_active_session'); } catch(e){}
 
   document.getElementById('login-page').classList.remove('hidden');
   ['student-app','admin-app','face-verify-overlay'].forEach(function(id){ document.getElementById(id).classList.add('hidden'); });
@@ -3865,6 +3866,14 @@ function completeStudentLoginV2() {
 
   /* Save to localStorage */
   try { localStorage.setItem('hm_sessions', JSON.stringify(LIVE_SESSIONS)); } catch(e){}
+  try {
+    localStorage.setItem('hm_active_session', JSON.stringify({
+      role: 'student',
+      student: currentStudent,
+      profilePhoto: studentProfilePhoto || currentStudent.profilePhoto || null,
+      loginTime: Date.now()
+    }));
+  } catch(e){}
 
   document.getElementById('login-page').classList.add('hidden');
   document.getElementById('student-app').classList.remove('hidden');
@@ -4256,6 +4265,9 @@ adminLogin = function() {
   if (u === 'hexaminds' && p === 'hexaminds123') {
     role = 'admin';
     window.role = 'admin';
+    try {
+      localStorage.setItem('hm_active_session', JSON.stringify({ role: 'admin', loginTime: Date.now() }));
+    } catch(e){}
     document.getElementById('login-page').classList.add('hidden');
     document.getElementById('admin-app').classList.remove('hidden');
     updateAdminBadges();

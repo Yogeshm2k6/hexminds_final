@@ -806,6 +806,16 @@ function completeStudentLoginV2() {
   if (typeof firebaseSyncDb === 'function') firebaseSyncDb();
   if (typeof firebaseSyncFaces === 'function') firebaseSyncFaces();
 
+  /* Persist active student session */
+  try {
+    localStorage.setItem('hm_active_session', JSON.stringify({
+      role: 'student',
+      student: currentStudent,
+      profilePhoto: studentProfilePhoto || currentStudent.profilePhoto || null,
+      loginTime: Date.now()
+    }));
+  } catch(e) {}
+
   document.getElementById('login-page').classList.add('hidden');
   document.getElementById('student-app').classList.remove('hidden');
   document.getElementById('s-nav-name').textContent = currentStudent.name;
@@ -5164,3 +5174,99 @@ window.deleteDepartment = function(code) {
     renderADepartments();
   }
 };
+
+/* =====================================================
+   PERSISTENT SESSION AUTO-RESTORE ON REFRESH
+   Prevents accidental logouts on browser refresh / reload
+===================================================== */
+window.restoreActiveSession = function() {
+  try {
+    var raw = localStorage.getItem('hm_active_session');
+    if (!raw) return;
+    var sess = JSON.parse(raw);
+    if (!sess || !sess.role) return;
+
+    var loginPage = document.getElementById('login-page');
+    var studentApp = document.getElementById('student-app');
+    var adminApp = document.getElementById('admin-app');
+    var staffApp = document.getElementById('staff-app');
+
+    if (sess.role === 'admin') {
+      role = 'admin';
+      window.role = 'admin';
+      if (loginPage) loginPage.classList.add('hidden');
+      if (adminApp) adminApp.classList.remove('hidden');
+      if (typeof updateAdminBadges === 'function') updateAdminBadges();
+      if (typeof renderADash === 'function') renderADash();
+      console.log('✓ Restored active Admin session across refresh');
+    } else if (sess.role === 'staff' && sess.staff) {
+      role = 'staff';
+      window.role = 'staff';
+      currentStaff = sess.staff;
+      window.currentStaff = sess.staff;
+      if (loginPage) loginPage.classList.add('hidden');
+      if (staffApp) staffApp.classList.remove('hidden');
+      var navInfo = document.getElementById('staff-nav-info');
+      if (navInfo) navInfo.textContent = currentStaff.name + ' (' + (currentStaff.dept || 'Faculty') + ')';
+      var av = document.getElementById('staff-avatar');
+      if (av) av.textContent = currentStaff.name.split(' ').map(function(n){ return n[0]; }).join('').slice(0,2).toUpperCase();
+      if (typeof staffNav === 'function') {
+        var dashTab = document.getElementById('si-staff-dash');
+        staffNav('sdash', dashTab);
+      }
+      console.log('✓ Restored active Staff session for:', currentStaff.name);
+    } else if (sess.role === 'student' && sess.student && sess.student.name) {
+      role = 'student';
+      window.role = 'student';
+      currentStudent = sess.student;
+      window.currentStudent = sess.student;
+      studentProfilePhoto = sess.profilePhoto || currentStudent.profilePhoto || null;
+      window.studentProfilePhoto = studentProfilePhoto;
+
+      if (!window.LIVE_SESSIONS) window.LIVE_SESSIONS = {};
+      if (!LIVE_SESSIONS[currentStudent.name]) {
+        LIVE_SESSIONS[currentStudent.name] = {
+          id: Date.now(), name: currentStudent.name, dob: currentStudent.dob, college: currentStudent.college,
+          dept: currentStudent.dept, department: currentStudent.dept, year: currentStudent.year,
+          status: 'online', loginTime: new Date(sess.loginTime || Date.now()).toLocaleTimeString(),
+          violations: [], examStarted: false, examName: null, score: null, grade: null,
+          profilePhoto: studentProfilePhoto
+        };
+      } else {
+        LIVE_SESSIONS[currentStudent.name].status = 'online';
+      }
+
+      if (loginPage) loginPage.classList.add('hidden');
+      if (studentApp) studentApp.classList.remove('hidden');
+
+      var navName = document.getElementById('s-nav-name');
+      if (navName) navName.textContent = currentStudent.name;
+      var navAv = document.getElementById('s-nav-av');
+      if (navAv) {
+        if (studentProfilePhoto) {
+          navAv.style.backgroundImage = 'url(' + studentProfilePhoto + ')';
+          navAv.style.backgroundSize = 'cover';
+          navAv.style.backgroundPosition = 'center';
+          navAv.textContent = '';
+          navAv.style.border = '2px solid var(--cyan)';
+        } else {
+          navAv.textContent = currentStudent.initials || 'ST';
+        }
+      }
+
+      if (typeof renderSDash === 'function') renderSDash();
+      console.log('✓ Restored active Student session for:', currentStudent.name);
+    }
+  } catch(e) {
+    console.warn('Session auto-restore notice:', e);
+  }
+};
+
+// Execute restore as soon as DOM is ready
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', function(){
+    setTimeout(window.restoreActiveSession, 60);
+  });
+} else {
+  setTimeout(window.restoreActiveSession, 60);
+}
