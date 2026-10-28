@@ -3301,7 +3301,8 @@ checkContinuousIdentityVerification = function(vid) {
     var controller = new AbortController();
     var timeoutId = setTimeout(function() { controller.abort(); }, 1200);
 
-    fetch('http://127.0.0.1:5000/api/biometrics/verify', {
+    var patchVerifyUrl = (typeof window.getBiometricsBaseUrl === 'function' ? window.getBiometricsBaseUrl() : 'https://hexminds-final-backend.onrender.com') + '/api/biometrics/verify';
+    fetch(patchVerifyUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

@@ -1240,7 +1240,8 @@ function fvCaptureFace() {
 
   /* Sync to InsightFace ArcFace Backend Service */
   try {
-    fetch('http://127.0.0.1:5000/api/biometrics/register', {
+    var regApiUrl = (typeof window.getBiometricsBaseUrl === 'function' ? window.getBiometricsBaseUrl() : 'https://hexminds-final-backend.onrender.com') + '/api/biometrics/register';
+    fetch(regApiUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -1325,7 +1326,8 @@ function fvVerifyFace() {
   }
 
   var regProfilePhoto = (stored && (stored.snapshot || stored.photoUrl)) || (fvPendingStudent && fvPendingStudent.profilePhoto) || null;
-  fetch('http://127.0.0.1:5000/api/biometrics/verify', {
+  var verifyLoginUrl = (typeof window.getBiometricsBaseUrl === 'function' ? window.getBiometricsBaseUrl() : 'https://hexminds-final-backend.onrender.com') + '/api/biometrics/verify';
+  fetch(verifyLoginUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -1944,7 +1946,8 @@ function checkContinuousIdentityVerification(vid) {
     _bioCtx.drawImage(vid, 0, 0, 640, 480);
     var frameDataUrl = _bioCanvas.toDataURL('image/jpeg', 0.85);
 
-    fetch('http://127.0.0.1:5000/api/biometrics/verify', {
+    var liveVerifyUrl = (typeof window.getBiometricsBaseUrl === 'function' ? window.getBiometricsBaseUrl() : 'https://hexminds-final-backend.onrender.com') + '/api/biometrics/verify';
+    fetch(liveVerifyUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

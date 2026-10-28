@@ -20,6 +20,8 @@ services:
         value: "0.48"
       - key: CONSISTENCY_FRAMES
         value: "2"
+      - key: KEEP_ALIVE_URL
+        value: "https://hexminds-final-backend.onrender.com"
 
   # ========================================================
   # 2. HexaMinds AI Proctoring Frontend Web Portal

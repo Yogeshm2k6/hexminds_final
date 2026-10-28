@@ -405,7 +405,8 @@ function fvCaptureFace() {
 
   /* Sync to InsightFace + ArcFace Backend Service */
   try {
-    fetch('http://127.0.0.1:5000/api/biometrics/register', {
+    var regApiUrl = (typeof window.getBiometricsBaseUrl === 'function' ? window.getBiometricsBaseUrl() : 'https://hexminds-final-backend.onrender.com') + '/api/biometrics/register';
+    fetch(regApiUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -497,7 +498,8 @@ function fvVerifyFace() {
 
   // Attempt ArcFace + Liveness verification via backend
   var regProfilePhoto = (stored && (stored.snapshot || stored.photoUrl)) || (fvPendingStudent && fvPendingStudent.profilePhoto) || null;
-  fetch('http://127.0.0.1:5000/api/biometrics/verify', {
+  var verifyApiUrl = (typeof window.getBiometricsBaseUrl === 'function' ? window.getBiometricsBaseUrl() : 'https://hexminds-final-backend.onrender.com') + '/api/biometrics/verify';
+  fetch(verifyApiUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({

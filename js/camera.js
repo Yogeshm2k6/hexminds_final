@@ -291,7 +291,8 @@ function checkContinuousIdentityVerification(vid) {
     var frameDataUrl = _bioCanvas.toDataURL('image/jpeg', 0.85);
 
     /* 1. Query Python InsightFace ArcFace + Anti-Spoofing Service with profile image */
-    fetch('http://127.0.0.1:5000/api/biometrics/verify', {
+    var bioApiUrl = (typeof window.getBiometricsBaseUrl === 'function' ? window.getBiometricsBaseUrl() : 'https://hexminds-final-backend.onrender.com') + '/api/biometrics/verify';
+    fetch(bioApiUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

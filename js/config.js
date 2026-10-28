@@ -86,4 +86,84 @@
         });
     }
   } catch(e) {}
+
+  // Global Biometrics Endpoint Helper
+  window.getBiometricsBaseUrl = function() {
+    if (window.HM_CONFIG && window.HM_CONFIG.BIOMETRICS && window.HM_CONFIG.BIOMETRICS.baseUrl) {
+      return window.HM_CONFIG.BIOMETRICS.baseUrl.replace(/\/+$/, '');
+    }
+    if (window.ENV && window.ENV.BIOMETRICS_URL) {
+      return window.ENV.BIOMETRICS_URL.replace(/\/+$/, '');
+    }
+    return "https://hexminds-final-backend.onrender.com";
+  };
+
+  // Client-Side Keep-Alive & Health Monitor
+  window.HM_BIOMETRICS_HEALTH = {
+    isOnline: false,
+    modelRunning: false,
+    latencyMs: null,
+    lastCheck: null,
+    modelName: null,
+    error: null
+  };
+
+  window.pingBiometricsBackend = function(callback) {
+    var baseUrl = window.getBiometricsBaseUrl();
+    var healthUrl = baseUrl + "/api/biometrics/health?test=false";
+    var startTime = Date.now();
+
+    fetch(healthUrl, { method: "GET", cache: "no-store" })
+      .then(function(res) {
+        return res.json().then(function(data) {
+          return { ok: res.ok, status: res.status, data: data };
+        });
+      })
+      .then(function(result) {
+        var elapsed = Date.now() - startTime;
+        var data = result.data || {};
+        var isModelUp = !!(data.model && data.model.running);
+
+        window.HM_BIOMETRICS_HEALTH = {
+          isOnline: true,
+          modelRunning: isModelUp,
+          latencyMs: elapsed,
+          lastCheck: new Date(),
+          modelName: (data.model && data.model.name) || "ArcFace",
+          data: data,
+          error: isModelUp ? null : (data.model && data.model.error)
+        };
+
+        if (isModelUp) {
+          console.log("✓ [HexaMinds Biometrics Engine] ONLINE & MODEL RUNNING (" + elapsed + "ms) — Buffalo_SC ArcFace 512-D");
+        } else {
+          console.warn("⚠ [HexaMinds Biometrics Engine] Online but model degraded:", data.model);
+        }
+
+        if (typeof callback === 'function') callback(window.HM_BIOMETRICS_HEALTH);
+      })
+      .catch(function(err) {
+        window.HM_BIOMETRICS_HEALTH = {
+          isOnline: false,
+          modelRunning: false,
+          latencyMs: null,
+          lastCheck: new Date(),
+          error: err.message
+        };
+        console.warn("ℹ [HexaMinds Biometrics] Backend waking up or offline. Client fallback active (" + err.message + ")");
+        if (typeof callback === 'function') callback(window.HM_BIOMETRICS_HEALTH);
+      });
+  };
+
+  // Immediately ping backend 1 second after page load to warm up Render container
+  if (typeof window !== 'undefined') {
+    setTimeout(function() {
+      window.pingBiometricsBackend();
+    }, 1200);
+
+    // Keep backend alive by pinging every 4.5 minutes (270,000 ms) while student/admin has tab open
+    setInterval(function() {
+      window.pingBiometricsBackend();
+    }, 270000);
+  }
 })();

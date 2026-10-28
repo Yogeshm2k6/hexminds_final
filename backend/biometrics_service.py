@@ -7,6 +7,8 @@ import os
 import json
 import base64
 import time
+import threading
+import urllib.request
 import numpy as np
 import cv2
 import hashlib
@@ -16,6 +18,8 @@ import insightface
 from insightface.app import FaceAnalysis
 
 from liveness import LivenessDetector
+
+SERVICE_START_TIME = time.time()
 
 # Flask app initialization
 app = Flask(__name__)
@@ -113,17 +117,90 @@ def save_vault():
         print(f"Error saving vault: {e}")
 
 
-# Initialize InsightFace Engine (Pre-loaded Singleton with 640x640 detection)
+# InsightFace Engine State & Initialization
+model_state = {
+    "initialized": False,
+    "error": None,
+    "model_name": config.get("insightface_model_name", "buffalo_sc"),
+    "providers": ["CPUExecutionProvider"],
+    "loaded_models": []
+}
+
+face_app = None
 print("Initializing InsightFace ArcFace Engine (det_size=640x640)...")
-face_app = FaceAnalysis(
-    name=config.get("insightface_model_name", "buffalo_sc"),
-    providers=["CPUExecutionProvider"]
-)
-face_app.prepare(ctx_id=0, det_size=(640, 640))
-print("InsightFace ArcFace Engine Ready!")
+try:
+    face_app = FaceAnalysis(
+        name=model_state["model_name"],
+        providers=model_state["providers"]
+    )
+    face_app.prepare(ctx_id=0, det_size=(640, 640))
+    if hasattr(face_app, "models"):
+        model_state["loaded_models"] = list(face_app.models.keys())
+    model_state["initialized"] = True
+    print("✓ InsightFace ArcFace Engine Ready! Loaded models:", model_state["loaded_models"])
+    
+    # Warm up ONNX Runtime engine with small synthetic frame
+    _dummy = np.zeros((128, 128, 3), dtype=np.uint8)
+    face_app.get(_dummy)
+    print("✓ ArcFace inference pipeline warmed up.")
+except Exception as e:
+    model_state["error"] = str(e)
+    print(f"⚠ InsightFace initialization warning: {e}")
 
 # Initialize Anti-Spoofing Liveness Detector
 liveness_detector = LivenessDetector(liveness_threshold=config.get("liveness_threshold", 0.48))
+
+# Keep-Alive Self-Pinging Monitor for Cloud Deployments (Render / Railway)
+keep_alive_info = {
+    "enabled": True,
+    "interval_seconds": 600,
+    "last_ping_time": None,
+    "last_status": "initialized",
+    "ping_count": 0,
+    "resolved_url": None
+}
+
+def _keep_alive_daemon():
+    """Background thread that sends an HTTP ping every 10 mins to keep cloud containers awake."""
+    # Give the web server 35 seconds to bind port before first check
+    time.sleep(35)
+    while True:
+        try:
+            target_url = (
+                os.environ.get("RENDER_EXTERNAL_URL") or 
+                os.environ.get("KEEP_ALIVE_URL") or 
+                os.environ.get("BIOMETRICS_SERVICE_URL") or 
+                config.get("keep_alive_url") or
+                "https://hexminds-final-backend.onrender.com"
+            )
+            if target_url:
+                target_url = target_url.rstrip("/")
+            
+            # Avoid self-pinging localhost in local development
+            if target_url and (target_url.startswith("http://") or target_url.startswith("https://")) and "127.0.0.1" not in target_url and "localhost" not in target_url:
+                keep_alive_info["resolved_url"] = target_url
+                ping_endpoint = f"{target_url}/api/biometrics/health"
+                req = urllib.request.Request(
+                    ping_endpoint,
+                    headers={"User-Agent": "HexaMinds-KeepAlive-Monitor/1.0"}
+                )
+                with urllib.request.urlopen(req, timeout=20) as resp:
+                    code = resp.getcode()
+                    keep_alive_info["last_status"] = f"HTTP {code}"
+                    keep_alive_info["last_ping_time"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+                    keep_alive_info["ping_count"] += 1
+                    print(f"[KEEP-ALIVE] Heartbeat sent to {ping_endpoint} => HTTP {code} (ping #{keep_alive_info['ping_count']})")
+            else:
+                keep_alive_info["last_status"] = "idle (local/unspecified host)"
+        except Exception as ping_err:
+            keep_alive_info["last_status"] = f"Ping notice: {ping_err}"
+            print(f"[KEEP-ALIVE] Self-ping attempt: {ping_err}")
+        
+        # Render free tier sleeps after 15 minutes of inactivity; ping every 10 minutes (600s)
+        time.sleep(600)
+
+_pinger_thread = threading.Thread(target=_keep_alive_daemon, daemon=True)
+_pinger_thread.start()
 
 # Temporal Session Decision Buffer for multi-frame consistency
 # student_id -> list of {'status': 'MATCH'|'MISMATCH'|'SPOOF'|'NO_FACE'|'MULTI', 'sim': float, 'ts': float}
@@ -209,15 +286,71 @@ def root_index():
     })
 
 
-@app.route("/api/biometrics/health", methods=["GET"])
+@app.route("/api/biometrics/health", methods=["GET", "HEAD"])
+@app.route("/health", methods=["GET", "HEAD"])
 def health():
+    if request.method == "HEAD":
+        return "", 200
+
+    now = time.time()
+    uptime_sec = round(now - SERVICE_START_TIME, 1)
+
+    # 1. Verify Model State
+    is_model_running = False
+    model_test_latency_ms = None
+    inference_check = "skipped"
+
+    if face_app is not None and model_state["initialized"]:
+        is_model_running = True
+        # If active test requested, execute quick model benchmark
+        if request.args.get("test") == "true":
+            try:
+                t0 = time.time()
+                dummy_frame = np.zeros((128, 128, 3), dtype=np.uint8)
+                face_app.get(dummy_frame)
+                model_test_latency_ms = round((time.time() - t0) * 1000, 2)
+                inference_check = "passed"
+            except Exception as test_err:
+                inference_check = f"failed: {test_err}"
+                is_model_running = False
+
+    model_details = {
+        "running": is_model_running,
+        "name": model_state["model_name"],
+        "providers": model_state["providers"],
+        "loaded_models": model_state["loaded_models"],
+        "inference_check": inference_check,
+        "test_latency_ms": model_test_latency_ms,
+        "error": model_state["error"]
+    }
+
+    # 2. Liveness Anti-Spoofing Status
+    liveness_status = {
+        "active": liveness_detector is not None and config.get("anti_spoofing_enabled", True),
+        "threshold": config.get("liveness_threshold", 0.48)
+    }
+
+    # 3. Overall Decision: healthy (200) vs degraded (503)
+    overall_status = "healthy" if is_model_running else "degraded"
+    status_code = 200 if is_model_running else 503
+
     return jsonify({
-        "status": "online",
+        "status": overall_status,
+        "service": "HexaMinds Biometrics Verification Engine",
         "engine": "InsightFace + ArcFace (512-D)",
-        "opencv_version": cv2.__version__,
+        "model": model_details,
+        "liveness": liveness_status,
+        "keep_alive": keep_alive_info,
         "registered_students": len(embeddings_vault),
-        "config": config
-    })
+        "opencv_version": cv2.__version__,
+        "uptime_seconds": uptime_sec,
+        "timestamp": int(now),
+        "config": {
+            "arcface_match_threshold": config.get("arcface_match_threshold"),
+            "liveness_threshold": config.get("liveness_threshold"),
+            "consistency_frames": config.get("consistency_frames")
+        }
+    }), status_code
 
 
 @app.route("/api/biometrics/config", methods=["GET", "POST"])
