@@ -1,3 +1,16 @@
+
+// Optimize TensorFlow.js WebGL execution pipeline for zero-lag inference
+(function initTfPerformance() {
+  try {
+    if (typeof tf !== 'undefined') {
+      tf.env().set('WEBGL_PACK', true);
+      tf.env().set('WEBGL_FORCE_F16_TEXTURES', true);
+      tf.env().set('WEBGL_CPU_FORWARD', false);
+      tf.env().set('WEBGL_DELETE_TEXTURE_THRESHOLD', 0);
+      tf.setBackend('webgl').catch(function(){});
+    }
+  } catch(e) {}
+})();
 /* =====================================================
    ADMIN NAV — extended with new pages (handled by the primary aNav above)
 ===================================================== */
@@ -3084,7 +3097,7 @@ window.drawFaceTrackingHUD = function() {
 
   // Throttle HUD rendering to ~30 FPS to eliminate main-thread lag
   var nowMs = Date.now();
-  if (window._lastHudDraw && (nowMs - window._lastHudDraw < 33)) return;
+  if (window._lastHudDraw && (nowMs - window._lastHudDraw < 42)) return;
   window._lastHudDraw = nowMs;
 
   var ctx = hud.getContext('2d');
@@ -3154,8 +3167,8 @@ window.drawFaceTrackingHUD = function() {
       var cornerLen = Math.min(18, bw * 0.25);
       ctx.strokeStyle = (consensus > 1 && idx > 0) ? '#ef4444' : boxColor;
       ctx.lineWidth = 2.5;
-      ctx.shadowColor = (consensus > 1 && idx > 0) ? '#ef4444' : boxColor;
-      ctx.shadowBlur = 6;
+      
+      // ctx.shadowBlur = 0;
       
       // Top-Left
       ctx.beginPath(); ctx.moveTo(bx, by + cornerLen); ctx.lineTo(bx, by); ctx.lineTo(bx + cornerLen, by); ctx.stroke();
@@ -3236,27 +3249,39 @@ window.drawFaceTrackingHUD = function() {
 initFaceDetection = function(vid) {
   if (!vid) return;
   
-  /* Shared canvas for frame sampling */
-  _faceDetectCanvas = document.createElement('canvas');
-  _faceDetectCanvas.width  = 320;
-  _faceDetectCanvas.height = 240;
-  _faceDetectCtx = _faceDetectCanvas.getContext('2d');
+  /* Shared canvas for frame sampling (lightweight 320x240) */
+  if (!_faceDetectCanvas) {
+    _faceDetectCanvas = document.createElement('canvas');
+    _faceDetectCanvas.width  = 320;
+    _faceDetectCanvas.height = 240;
+    _faceDetectCtx = _faceDetectCanvas.getContext('2d');
+  }
   
   setupCamHUD(vid);
   
   if (faceLoopInterval) clearInterval(faceLoopInterval);
+  if (window._mlTimer) clearTimeout(window._mlTimer);
   window._mlDetectBusy = false;
   
-  // Non-blocking face detection loop (750ms interval gives smooth detection without CPU choking)
-  faceLoopInterval = setInterval(function() {
-    if (!vid || !examActive || vid.readyState < 2) return;
-    runMLDetection(vid);
-  }, 750);
+  function scheduleNextMLTick(delayMs) {
+    if (!examActive) return;
+    if (window._mlTimer) clearTimeout(window._mlTimer);
+    window._mlTimer = setTimeout(function() {
+      if (!vid || !examActive || vid.readyState < 2) {
+        scheduleNextMLTick(600);
+        return;
+      }
+      runMLDetection(vid, function() {
+        // Guaranteed 650ms UI thread breathing room between inferences
+        scheduleNextMLTick(650);
+      });
+    }, delayMs || 650);
+  }
   
-  // Immediate first tick
+  // Kick off first tick
   setTimeout(function() {
-    if (examActive && vid && vid.readyState >= 2) runMLDetection(vid);
-  }, 100);
+    scheduleNextMLTick(100);
+  }, 150);
   
   // Load models in background
   loadMLModels(function() {
@@ -3267,7 +3292,7 @@ initFaceDetection = function(vid) {
   });
 };
 
-// Auto-load COCO-SSD dynamically if not yet ready
+    // Auto-load COCO-SSD dynamically if not yet ready
 function ensureCocoSsdLoaded() {
   if (!_cocoSsdModel && typeof cocoSsd !== 'undefined' && !window._cocoSsdLoading) {
     window._cocoSsdLoading = true;
@@ -3286,9 +3311,15 @@ function ensureCocoSsdLoaded() {
 }
 
 // Override runMLDetection to continuously perform face detection, gaze tracking, and HUD updating
-runMLDetection = function(vid) {
-  if (!vid || !examActive || vid.readyState < 2) return;
-  if (window._mlDetectBusy) return; // Prevent overlapping ML inference tasks!
+runMLDetection = function(vid, onDone) {
+  if (!vid || !examActive || vid.readyState < 2) {
+    if (onDone) onDone();
+    return;
+  }
+  if (window._mlDetectBusy) {
+    if (onDone) onDone();
+    return;
+  }
   window._mlDetectBusy = true;
 
   ensureCocoSsdLoaded();
@@ -3296,6 +3327,7 @@ runMLDetection = function(vid) {
   
   try { _faceDetectCtx.drawImage(vid, 0, 0, 320, 240); } catch(e) {
     window._mlDetectBusy = false;
+    if (onDone) onDone();
     return;
   }
   
@@ -3321,11 +3353,11 @@ runMLDetection = function(vid) {
           }])
       );
 
-  // Alternate heavy COCO-SSD phone detection every 2nd frame (~1.5s) to save CPU
-  var shouldCheckPhone = _cocoSsdModel && (window._hudFrameCount % 2 === 0);
-  var objPromise = shouldCheckPhone ? _cocoSsdModel.detect(vid) : Promise.resolve(window._lastPhonePreds || null);
+  // Check phone on lightweight 320x240 canvas every 3rd frame (~2.2s) instead of full video (12x fewer pixels!)
+  var shouldCheckPhone = _cocoSsdModel && (window._hudFrameCount % 3 === 0);
+  var objPromise = shouldCheckPhone ? _cocoSsdModel.detect(_faceDetectCanvas) : Promise.resolve(window._lastPhonePreds || null);
 
-  // Invoke candidate biometric verification (throttled every 3.5s internally)
+  // Invoke candidate biometric verification (throttled every 8s internally)
   if (typeof checkContinuousIdentityVerification === 'function') {
     checkContinuousIdentityVerification(vid);
   }
@@ -3359,7 +3391,7 @@ runMLDetection = function(vid) {
 
     var gazeStatus = { text: 'Looking Straight', isDiverted: false };
 
-    // Dynamic head movement estimation (Robust & natural tolerance)
+// Dynamic head movement estimation (Robust & natural tolerance)
     if (consensus === 1 && validFaces && validFaces.length === 1) {
       var f = validFaces[0];
       var tl = f.topLeft, br = f.bottomRight;
@@ -3468,8 +3500,10 @@ runMLDetection = function(vid) {
       phonePreds: phonePreds,
       timestamp: Date.now()
     };
+    if (onDone) onDone();
   }).catch(function(e) {
     window._mlDetectBusy = false;
+    if (onDone) onDone();
   });
 };
 
@@ -3480,7 +3514,7 @@ checkContinuousIdentityVerification = function(vid) {
   
   var now = Date.now();
   // Throttle cloud ArcFace verification to every 3.5 seconds (3500ms) to prevent network lag spikes
-  if (now - _lastBiometricCheck < 3500) return;
+  if (now - _lastBiometricCheck < 8000) return; // Throttled to 8s
   _lastBiometricCheck = now;
   window._bioCheckCount = (window._bioCheckCount || 0) + 1;
 
@@ -3523,13 +3557,12 @@ checkContinuousIdentityVerification = function(vid) {
   // Lightweight 320x240 frame canvas (90% smaller payload: ~18KB instead of ~250KB!)
   if (!_bioCanvas) {
     _bioCanvas = document.createElement('canvas');
-    _bioCanvas.width = 320;
-    _bioCanvas.height = 240;
+    _bioCanvas.width = 240; _bioCanvas.height = 180;
     _bioCtx = _bioCanvas.getContext('2d');
   }
 
   try {
-    _bioCtx.drawImage(vid, 0, 0, 320, 240);
+    _bioCtx.drawImage(vid, 0, 0, 240, 180);
     var frameDataUrl = _bioCanvas.toDataURL('image/jpeg', 0.65);
 
     window._bioFetchPending = true;
