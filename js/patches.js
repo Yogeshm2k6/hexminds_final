@@ -1393,6 +1393,146 @@ window.adminLogin = adminLogin;
    ADMIN EXAMS PERSISTENCE & CRUD PATCHES
 ===================================================== */
 
+// Ensure default datasets are available
+if (!window.DEFAULT_QUESTIONS || !window.DEFAULT_QUESTIONS.length) {
+  window.DEFAULT_QUESTIONS = [
+    {
+      id: 1,
+      q: 'Which data structure follows the Last-In-First-Out (LIFO) principle?',
+      opts: ['Queue', 'Stack', 'Linked List', 'Binary Search Tree'],
+      ans: 1,
+      type: 'MCQ',
+      marks: 1
+    },
+    {
+      id: 2,
+      q: 'What is the average time complexity of Binary Search on a sorted array of n elements?',
+      opts: ['O(n)', 'O(n²)', 'O(log n)', 'O(1)'],
+      ans: 2,
+      type: 'MCQ',
+      marks: 1
+    },
+    {
+      id: 3,
+      q: 'Which of the following is NOT an Object-Oriented Programming (OOP) pillar?',
+      opts: ['Encapsulation', 'Inheritance', 'Compilation', 'Polymorphism'],
+      ans: 2,
+      type: 'MCQ',
+      marks: 1
+    },
+    {
+      id: 4,
+      q: 'What does HTML stand for in web development?',
+      opts: [
+        'HyperText Markup Language',
+        'High-Tech Modern Language',
+        'HyperText Modeling Language',
+        'Home Tool Markup Language'
+      ],
+      ans: 0,
+      type: 'MCQ',
+      marks: 1
+    },
+    {
+      id: 5,
+      q: 'Which cryptographic hash function produces a 512-bit message digest?',
+      opts: ['MD5', 'SHA-1', 'SHA-512', 'DES'],
+      ans: 2,
+      type: 'MCQ',
+      marks: 1
+    }
+  ];
+}
+
+if (!window.DEFAULT_EXAMS || !window.DEFAULT_EXAMS.length) {
+  window.DEFAULT_EXAMS = [
+    {
+      id: 1,
+      title: 'Computer Science 101 — Foundation Assessment',
+      code: 'CS101',
+      questions: 5,
+      duration: 60,
+      status: 'active',
+      published: true,
+      enrolled: 42,
+      date: '2026-10-28',
+      startTime: '00:00',
+      endTime: '23:59',
+      targetDept: 'All Departments',
+      targetYear: 'All Years',
+      targetCollege: 'All Colleges',
+      questionsList: window.DEFAULT_QUESTIONS
+    },
+    {
+      id: 2,
+      title: 'Artificial Intelligence & Biometrics Systems',
+      code: 'AI201',
+      questions: 5,
+      duration: 45,
+      status: 'active',
+      published: true,
+      enrolled: 36,
+      date: '2026-10-28',
+      startTime: '00:00',
+      endTime: '23:59',
+      targetDept: 'All Departments',
+      targetYear: 'All Years',
+      targetCollege: 'All Colleges',
+      questionsList: window.DEFAULT_QUESTIONS
+    }
+  ];
+}
+
+if (!window.DEFAULT_STUDENT_EXAMS || !window.DEFAULT_STUDENT_EXAMS.length) {
+  window.DEFAULT_STUDENT_EXAMS = [
+    {
+      id: 1,
+      title: 'Computer Science 101 — Foundation Assessment',
+      code: 'CS101',
+      questions: 5,
+      duration: 60,
+      status: 'available',
+      published: true,
+      date: '2026-10-28',
+      startTime: '00:00',
+      endTime: '23:59',
+      score: null,
+      targetDept: 'All Departments',
+      targetYear: 'All Years',
+      targetCollege: 'All Colleges',
+      questionsList: window.DEFAULT_QUESTIONS
+    },
+    {
+      id: 2,
+      title: 'Artificial Intelligence & Biometrics Systems',
+      code: 'AI201',
+      questions: 5,
+      duration: 45,
+      status: 'available',
+      published: true,
+      date: '2026-10-28',
+      startTime: '00:00',
+      endTime: '23:59',
+      score: null,
+      targetDept: 'All Departments',
+      targetYear: 'All Years',
+      targetCollege: 'All Colleges',
+      questionsList: window.DEFAULT_QUESTIONS
+    }
+  ];
+}
+
+// Ensure global arrays are populated with fallback
+if (typeof EXAMS === 'undefined' || !EXAMS || !EXAMS.length) {
+  EXAMS = JSON.parse(JSON.stringify(window.DEFAULT_EXAMS));
+}
+if (typeof studentExams === 'undefined' || !studentExams || !studentExams.length) {
+  studentExams = JSON.parse(JSON.stringify(window.DEFAULT_STUDENT_EXAMS));
+}
+if (typeof QUESTIONS === 'undefined' || !QUESTIONS || !QUESTIONS.length) {
+  QUESTIONS = JSON.parse(JSON.stringify(window.DEFAULT_QUESTIONS));
+}
+
 // Backup original QUESTIONS
 var ORIGINAL_QUESTIONS = JSON.parse(JSON.stringify(QUESTIONS));
 var currentExamId = 1;
@@ -1431,13 +1571,30 @@ function calculateDurationInMinutes(start, end) {
   return diff;
 }
 
-// Load exams from localStorage
+// Load exams from localStorage or fall back to defaults
 (function() {
   try {
     var storedExams = localStorage.getItem('hm_exams');
-    if (storedExams) EXAMS = JSON.parse(storedExams);
+    if (storedExams) {
+      var pEx = JSON.parse(storedExams);
+      if (Array.isArray(pEx) && pEx.length > 0) EXAMS = pEx;
+      else EXAMS = JSON.parse(JSON.stringify(window.DEFAULT_EXAMS));
+    } else {
+      EXAMS = JSON.parse(JSON.stringify(window.DEFAULT_EXAMS));
+    }
+    
     var storedStudentExams = localStorage.getItem('hm_student_exams');
-    if (storedStudentExams) studentExams = JSON.parse(storedStudentExams);
+    if (storedStudentExams) {
+      var pSe = JSON.parse(storedStudentExams);
+      if (Array.isArray(pSe) && pSe.length > 0) studentExams = pSe;
+      else studentExams = JSON.parse(JSON.stringify(window.DEFAULT_STUDENT_EXAMS));
+    } else {
+      studentExams = JSON.parse(JSON.stringify(window.DEFAULT_STUDENT_EXAMS));
+    }
+
+    if (!QUESTIONS || QUESTIONS.length === 0) {
+      QUESTIONS = JSON.parse(JSON.stringify(window.DEFAULT_QUESTIONS));
+    }
   } catch(e) {}
 })();
 
@@ -1879,9 +2036,14 @@ joinCode2 = function() {
 
 // Patch startExam to set dynamic questions, time limits, check accessibility time window, and initiate all proctoring components
 startExam = function(id) {
-  var exam = studentExams.find(function(e){ return e.id === id; }) || EXAMS.find(function(e){ return e.id === id; });
+  var exam = (studentExams && studentExams.find(function(e){ return String(e.id) === String(id); })) 
+          || (EXAMS && EXAMS.find(function(e){ return String(e.id) === String(id); }))
+          || (window.DEFAULT_EXAMS && window.DEFAULT_EXAMS.find(function(e){ return String(e.id) === String(id); }))
+          || (studentExams && studentExams[0])
+          || (EXAMS && EXAMS[0])
+          || (window.DEFAULT_EXAMS && window.DEFAULT_EXAMS[0]);
   if (!exam) {
-    alert('Exam not found.');
+    alert('Exam not found. Please refresh the page and try again.');
     return;
   }
   
@@ -1911,13 +2073,15 @@ startExam = function(id) {
     }
   }
   
-  currentExamId = id;
+  currentExamId = exam.id || id;
   
   // Set QUESTIONS dynamically
   if (exam.questionsList && exam.questionsList.length > 0) {
     QUESTIONS = JSON.parse(JSON.stringify(exam.questionsList));
-  } else {
+  } else if (typeof ORIGINAL_QUESTIONS !== 'undefined' && ORIGINAL_QUESTIONS && ORIGINAL_QUESTIONS.length > 0) {
     QUESTIONS = JSON.parse(JSON.stringify(ORIGINAL_QUESTIONS));
+  } else if (window.DEFAULT_QUESTIONS && window.DEFAULT_QUESTIONS.length > 0) {
+    QUESTIONS = JSON.parse(JSON.stringify(window.DEFAULT_QUESTIONS));
   }
   
   examAnswers = {};
@@ -1994,7 +2158,16 @@ function saveTextAns(qId, val) {
 
 // Override renderExam to support descriptive (Subjective) questions with original proctor layout & CSS hook compatibility
 renderExam = function(id) {
-  var exam = studentExams.find(function(e){ return e.id === id; }) || studentExams[0];
+  var exam = (studentExams && studentExams.find(function(e){ return String(e.id) === String(id); })) 
+          || (EXAMS && EXAMS.find(function(e){ return String(e.id) === String(id); })) 
+          || (studentExams && studentExams[0]) 
+          || (EXAMS && EXAMS[0])
+          || (window.DEFAULT_EXAMS && window.DEFAULT_EXAMS[0])
+          || { id: 1, title: 'Computer Science 101 — Foundation Assessment', duration: 60 };
+  if (!QUESTIONS || QUESTIONS.length === 0) {
+    if (exam.questionsList && exam.questionsList.length) QUESTIONS = JSON.parse(JSON.stringify(exam.questionsList));
+    else if (window.DEFAULT_QUESTIONS) QUESTIONS = JSON.parse(JSON.stringify(window.DEFAULT_QUESTIONS));
+  }
   document.getElementById('s-content').innerHTML =
     '<div style="display:grid;grid-template-columns:1fr 280px;gap:18px" class="page-enter">' +
       /* Left: Questions */
@@ -4591,10 +4764,16 @@ window.verifyExamCohortEligibility = function(ex) {
 joinCode = function() {
   var c = ((document.getElementById('code-inp')||{}).value||'').trim().toUpperCase();
   if (!c) { alert('Please enter an exam code.'); return; }
-  var ex = EXAMS.find(function(e){ return (e.code||'').toUpperCase() === c; }) || studentExams.find(function(e){ return (e.code||'').toUpperCase() === c; });
+  var ex = (EXAMS || []).find(function(e){ return (e.code||'').toUpperCase() === c; }) 
+        || (studentExams || []).find(function(e){ return (e.code||'').toUpperCase() === c; })
+        || (window.DEFAULT_EXAMS || []).find(function(e){ return (e.code||'').toUpperCase() === c; });
   if (!ex) {
-    if (c === 'CS101' && EXAMS.length > 0) ex = EXAMS[0];
-    else { alert('Exam code "' + c + '" not found. Please verify with your instructor.'); return; }
+    if ((c === 'CS101' || c === 'AI201') && window.DEFAULT_EXAMS && window.DEFAULT_EXAMS.length > 0) {
+      ex = window.DEFAULT_EXAMS.find(function(e){ return e.code === c; }) || window.DEFAULT_EXAMS[0];
+    } else {
+      alert('Exam code "' + c + '" not found. Please verify with your instructor.');
+      return;
+    }
   }
   if (ex.published === false) {
     alert('This exam is currently in Draft (Unpublished) mode. Please wait for faculty to publish it.');
@@ -4612,10 +4791,16 @@ joinCode = function() {
 joinCode2 = function() {
   var c = ((document.getElementById('join-code')||{}).value||'').trim().toUpperCase();
   if (!c) { alert('Please enter an exam code.'); return; }
-  var ex = EXAMS.find(function(e){ return (e.code||'').toUpperCase() === c; }) || studentExams.find(function(e){ return (e.code||'').toUpperCase() === c; });
+  var ex = (EXAMS || []).find(function(e){ return (e.code||'').toUpperCase() === c; }) 
+        || (studentExams || []).find(function(e){ return (e.code||'').toUpperCase() === c; })
+        || (window.DEFAULT_EXAMS || []).find(function(e){ return (e.code||'').toUpperCase() === c; });
   if (!ex) {
-    if (c === 'CS101' && EXAMS.length > 0) ex = EXAMS[0];
-    else { alert('Exam code "' + c + '" not found. Please verify with your instructor.'); return; }
+    if ((c === 'CS101' || c === 'AI201') && window.DEFAULT_EXAMS && window.DEFAULT_EXAMS.length > 0) {
+      ex = window.DEFAULT_EXAMS.find(function(e){ return e.code === c; }) || window.DEFAULT_EXAMS[0];
+    } else {
+      alert('Exam code "' + c + '" not found. Please verify with your instructor.');
+      return;
+    }
   }
   if (ex.published === false) {
     alert('This exam is currently in Draft (Unpublished) mode. Please wait for faculty to publish it.');
