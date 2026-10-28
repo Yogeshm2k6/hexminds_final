@@ -2399,6 +2399,22 @@ checkGazeAway = function(isAway) {
 };
 
 // Override handlePhoneDetectedML to use the dynamic active exam code
+
+window.PHONE_CLASSES = ['cell phone', 'phone', 'telephone', 'mobile phone', 'remote'];
+
+window.checkPhoneInPredictions = function(preds) {
+  if (!preds || !examActive || phoneDetected) return;
+  var phoneKeywords = ['cell phone', 'phone', 'telephone', 'mobile phone', 'remote'];
+  var found = preds.filter(function(p) {
+    var cls = (p.class || '').toLowerCase().trim();
+    return phoneKeywords.indexOf(cls) !== -1 && p.score >= 0.28;
+  });
+  if (found.length > 0) {
+    var best = found.reduce(function(a, b) { return a.score > b.score ? a : b; });
+    handlePhoneDetectedML(best.class, Math.round(best.score * 100));
+  }
+};
+
 handlePhoneDetectedML = function(objClass, confidence) {
   if (phoneDetected || !examActive) return;
   phoneDetected = true;
@@ -3240,7 +3256,7 @@ window.drawFaceTrackingHUD = function() {
       ctx.fillRect(px, Math.max(24, py - 16), pw, 16);
       ctx.fillStyle = '#ffffff';
       ctx.font = 'bold 8px "JetBrains Mono", monospace';
-      ctx.fillText('📵 PHONE / DEVICE', px + 3, Math.max(35, py - 4));
+      ctx.fillText('📵 MOBILE PHONE DETECTED', px + 3, Math.max(35, py - 4));
     });
   }
 };
@@ -3354,7 +3370,7 @@ runMLDetection = function(vid, onDone) {
       );
 
   // Check phone on lightweight 320x240 canvas every 3rd frame (~2.2s) instead of full video (12x fewer pixels!)
-  var shouldCheckPhone = _cocoSsdModel && (window._hudFrameCount % 3 === 0);
+  var shouldCheckPhone = _cocoSsdModel && (window._hudFrameCount % 2 === 0);
   var objPromise = shouldCheckPhone ? _cocoSsdModel.detect(_faceDetectCanvas) : Promise.resolve(window._lastPhonePreds || null);
 
   // Invoke candidate biometric verification (throttled every 8s internally)
@@ -3508,6 +3524,102 @@ runMLDetection = function(vid, onDone) {
 };
 
 // Continuous Non-Blocking Candidate Biometric Verification Engine
+
+// Override handleImpersonationViolation to immediately auto-submit exam on face mismatch
+window.handleImpersonationViolation = function(matchPct, reason) {
+  if (!examActive) return;
+  var camBox = document.getElementById('cam-box');
+  if (camBox) camBox.classList.add('impersonation-alert');
+
+  var photo = (typeof captureViolationPhoto === 'function') ? captureViolationPhoto() : '';
+  var examCode = (typeof currentExamId !== 'undefined' && currentExamId) ? currentExamId : 'CS101';
+  
+  var v = {
+    type: 'Biometric Mismatch (Unverified Face)',
+    time: new Date().toLocaleTimeString(),
+    exam: examCode,
+    severity: 'critical',
+    desc: (reason || 'Face Not Verified') + ' (' + matchPct + '% match). Exam auto-submitted immediately.',
+    photo: photo
+  };
+
+  sessionViolations.push(v);
+  violationCount++;
+  if (currentStudent.name && LIVE_SESSIONS[currentStudent.name]) {
+    LIVE_SESSIONS[currentStudent.name].violations.push(v);
+  }
+  updateSuspicionScore(100);
+
+  var vc = document.getElementById('viol-count');
+  if (vc) vc.textContent = violationCount;
+
+  escalateProctorBar('⛔ FACE NOT VERIFIED — AUTO SUBMITTING');
+  
+  showViolationAlert(
+    '⛔ Face Not Verified — Auto Submitting Exam',
+    'Candidate biometric identity could not be verified (' + matchPct + '% match). Mismatch with registered profile photo. Exam is being automatically submitted immediately.',
+    true
+  );
+
+  if (typeof recordPersistentViolation === 'function') {
+    recordPersistentViolation(currentStudent.name || 'Unknown', v);
+  }
+
+  // Immediately start auto-submit countdown
+  if (typeof startAutoSubmitCountdown === 'function') {
+    startAutoSubmitCountdown('Face Not Verified — Biometric Identity Mismatch (' + matchPct + '%)');
+  } else {
+    submitExam(true);
+  }
+};
+
+// Override handleSpoofViolation to immediately auto-submit on spoof replay
+window.handleSpoofViolation = function(reason) {
+  if (!examActive) return;
+  var camBox = document.getElementById('cam-box');
+  if (camBox) camBox.classList.add('impersonation-alert');
+
+  var photo = (typeof captureViolationPhoto === 'function') ? captureViolationPhoto() : '';
+  var examCode = (typeof currentExamId !== 'undefined' && currentExamId) ? currentExamId : 'CS101';
+  
+  var v = {
+    type: 'Anti-Spoofing Alert (Photo/Screen)',
+    time: new Date().toLocaleTimeString(),
+    exam: examCode,
+    severity: 'critical',
+    desc: (reason || 'Screen replay / printed photo spoof detected') + '. Exam auto-submitted immediately.',
+    photo: photo
+  };
+
+  sessionViolations.push(v);
+  violationCount++;
+  if (currentStudent.name && LIVE_SESSIONS[currentStudent.name]) {
+    LIVE_SESSIONS[currentStudent.name].violations.push(v);
+  }
+  updateSuspicionScore(100);
+
+  var vc = document.getElementById('viol-count');
+  if (vc) vc.textContent = violationCount;
+
+  escalateProctorBar('⛔ SPOOF DETECTED — AUTO SUBMITTING');
+  
+  showViolationAlert(
+    '⛔ Anti-Spoofing Alert — Auto Submitting Exam',
+    'Screen replay or printed photo attack detected. Live physical face required. Exam is being automatically submitted immediately.',
+    true
+  );
+
+  if (typeof recordPersistentViolation === 'function') {
+    recordPersistentViolation(currentStudent.name || 'Unknown', v);
+  }
+
+  if (typeof startAutoSubmitCountdown === 'function') {
+    startAutoSubmitCountdown('Anti-Spoofing Alert — Screen Replay / Photo Detected');
+  } else {
+    submitExam(true);
+  }
+};
+
 checkContinuousIdentityVerification = function(vid) {
   if (!vid || !examActive || vid.readyState < 2) return;
   if (window._bioFetchPending) return; // Non-blocking: skip if previous network verification is still in flight
@@ -3617,9 +3729,7 @@ checkContinuousIdentityVerification = function(vid) {
         if (compareStatus) {
           compareStatus.innerHTML = '<span style="color:#dc2626;font-weight:700">⚠ MISMATCH (' + (result.match_percentage || 0) + '%)</span> · #' + window._bioCheckCount + ' · [' + curTime + ']';
         }
-        if (_impersonationFrames >= 2) {
-          handleImpersonationViolation(result.match_percentage || 0, 'Face Mismatch: Person in live camera does not match candidate profile photo');
-        }
+        handleImpersonationViolation(result.match_percentage || 0, 'Face Not Verified: Live camera face does not match registered candidate photo');
       } else if (result.status === 'SPOOF') {
         if (badge) {
           badge.className = 'badge badge-red';

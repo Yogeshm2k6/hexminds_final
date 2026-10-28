@@ -331,9 +331,7 @@ function checkContinuousIdentityVerification(vid) {
         if (compareStatus) {
           compareStatus.innerHTML = '<span style="color:#dc2626;font-weight:700">⚠ MISMATCH (' + (result.match_percentage || 0) + '%)</span> · Does NOT match profile!';
         }
-        if (_impersonationFrames >= 2) {
-          handleImpersonationViolation(result.match_percentage || 0, 'Face Mismatch: Person in live camera does not match candidate profile photo');
-        }
+        handleImpersonationViolation(result.match_percentage || 0, 'Face Not Verified: Live camera face does not match registered candidate photo');
       } else if (result.status === 'SPOOF') {
         if (badge) {
           badge.className = 'badge badge-red';
@@ -476,8 +474,10 @@ function handleImpersonationViolation(matchPct, reason) {
       recordPersistentViolation(currentStudent.name || 'Unknown', v);
     }
 
-    if (typeof checkAutoSubmit === 'function') {
-      checkAutoSubmit();
+    if (typeof startAutoSubmitCountdown === 'function') {
+      startAutoSubmitCountdown('Face Not Verified — Biometric Identity Mismatch');
+    } else if (typeof submitExam === 'function') {
+      submitExam(true);
     }
   }
 }
@@ -522,8 +522,10 @@ function handleSpoofViolation(reason) {
       recordPersistentViolation(currentStudent.name || 'Unknown', v);
     }
 
-    if (typeof checkAutoSubmit === 'function') {
-      checkAutoSubmit();
+    if (typeof startAutoSubmitCountdown === 'function') {
+      startAutoSubmitCountdown('Face Not Verified — Biometric Identity Mismatch');
+    } else if (typeof submitExam === 'function') {
+      submitExam(true);
     }
   }
 }

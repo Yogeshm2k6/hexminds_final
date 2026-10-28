@@ -2016,9 +2016,7 @@ function checkContinuousIdentityVerification(vid) {
         if (compareStatus) {
           compareStatus.innerHTML = '<span style="color:#dc2626;font-weight:700">⚠ MISMATCH (' + (result.match_percentage || 0) + '%)</span> · Does NOT match profile!';
         }
-        if (_impersonationFrames >= 2) {
-          handleImpersonationViolation(result.match_percentage || 0, 'Face Mismatch: Person in live camera does not match candidate profile photo');
-        }
+        handleImpersonationViolation(result.match_percentage || 0, 'Face Not Verified: Live camera face does not match registered candidate photo');
       } else if (result.status === 'SPOOF') {
         if (badge) {
           badge.className = 'badge badge-red';
@@ -2061,12 +2059,13 @@ function checkContinuousIdentityVerification(vid) {
 function handleImpersonationViolation(simPct, reason) {
   var camBox = document.getElementById('cam-box');
   if (camBox) camBox.classList.add('impersonation-alert');
-  violationCount++;
-  logViolation('Impersonation / Face Mismatch', reason + ' (' + simPct + '% match). Exam integrity compromised.', 'high');
-  showViolationAlert('🚨 Candidate Impersonation Detected',
-    'The face in the camera does not match the registered candidate (' + simPct + '% match). This incident has been recorded with photographic evidence.', false);
-  escalateProctorBar('Impersonation Violation');
-  checkAutoSubmit();
+  escalateProctorBar('⛔ FACE NOT VERIFIED — AUTO SUBMITTING');
+  showViolationAlert('⛔ Face Not Verified — Auto Submitting', 'Live camera face does not match registered candidate (' + simPct + '% match). Exam auto-submitting.', true);
+  if (typeof startAutoSubmitCountdown === 'function') {
+    startAutoSubmitCountdown('Face Not Verified — Biometric Identity Mismatch');
+  } else {
+    submitExam(true);
+  }
 }
 
 function handleSpoofViolation(reason) {
