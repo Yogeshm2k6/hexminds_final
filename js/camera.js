@@ -199,7 +199,6 @@ function runMLDetection(vid) {
 
     /* Gaze / look-away check — only when exactly 1 face is present */
     if (consensus === 1 && faces && faces.length === 1) {
-      checkContinuousIdentityVerification(vid);
       var f = faces[0];
       var tl = f.topLeft, br = f.bottomRight;
       if (tl && br && f.landmarks && f.landmarks.length >= 3) {
@@ -400,8 +399,12 @@ function runClientBiometricsFallback(vid) {
   }
 
   try {
-    var smallCanvas = document.createElement('canvas');
-    smallCanvas.width = 160; smallCanvas.height = 120;
+    if (!window._smallFallbackCanvas) {
+      window._smallFallbackCanvas = document.createElement('canvas');
+      window._smallFallbackCanvas.width = 160;
+      window._smallFallbackCanvas.height = 120;
+    }
+    var smallCanvas = window._smallFallbackCanvas;
     var sctx = smallCanvas.getContext('2d');
     sctx.drawImage(vid, 0, 0, 160, 120);
     var imgData = sctx.getImageData(0, 0, 160, 120);

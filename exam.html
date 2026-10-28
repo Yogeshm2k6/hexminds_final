@@ -1932,20 +1932,32 @@ function checkContinuousIdentityVerification(vid) {
   var studentId = (currentStudent && (currentStudent.studentId || currentStudent.id)) || (typeof registeredFaceData !== 'undefined' && registeredFaceData[faceKey] ? registeredFaceData[faceKey].studentId : '') || (currentStudent && currentStudent.name ? currentStudent.name.toLowerCase().replace(/\s+/g, '_') : 'default');
   var studentName = (currentStudent && currentStudent.name) || '';
 
+  if (window._bioFetchPending) return;
+  var now = Date.now();
+  if (typeof _lastBiometricCheck !== 'undefined' && now - _lastBiometricCheck < 3500) return;
+  _lastBiometricCheck = now;
+
   var badge = document.getElementById('biometric-match-badge');
   var compareStatus = document.getElementById('live-profile-compare-status');
   var camBox = document.getElementById('cam-box');
 
   if (!_bioCanvas) {
     _bioCanvas = document.createElement('canvas');
-    _bioCanvas.width = 640;
-    _bioCanvas.height = 480;
+    _bioCanvas.width = 320;
+    _bioCanvas.height = 240;
     _bioCtx = _bioCanvas.getContext('2d');
   }
 
   try {
-    _bioCtx.drawImage(vid, 0, 0, 640, 480);
-    var frameDataUrl = _bioCanvas.toDataURL('image/jpeg', 0.85);
+    _bioCtx.drawImage(vid, 0, 0, 320, 240);
+    var frameDataUrl = _bioCanvas.toDataURL('image/jpeg', 0.65);
+
+    window._bioFetchPending = true;
+    var controller = new AbortController();
+    var timeoutId = setTimeout(function() { 
+      try { controller.abort(); } catch(e){} 
+      window._bioFetchPending = false;
+    }, 4500);
 
     var liveVerifyUrl = (typeof window.getBiometricsBaseUrl === 'function' ? window.getBiometricsBaseUrl() : 'https://hexminds-final-backend.onrender.com') + '/api/biometrics/verify';
     fetch(liveVerifyUrl, {
@@ -1957,9 +1969,14 @@ function checkContinuousIdentityVerification(vid) {
         student_name: studentName,
         profile_image: profilePhoto,
         image: frameDataUrl
-      })
+      }),
+      signal: controller.signal
     })
-    .then(function(res){ return res.json(); })
+    .then(function(res){
+      clearTimeout(timeoutId);
+      window._bioFetchPending = false;
+      return res.json();
+    })
     .then(function(result){
       if (!examActive) return;
 

@@ -1,5 +1,5 @@
 /* =====================================================
-   PARTICLE LOGIN BACKGROUND
+   PARTICLE LOGIN BACKGROUND (OPTIMIZED)
 ===================================================== */
 (function initParticles() {
   var canvas = document.getElementById('login-canvas');
@@ -14,23 +14,30 @@
 
   var particles = window.particles || [];
   window.particles = particles;
-  for (var i = 0; i < 80; i++) {
+  for (var i = 0; i < 45; i++) {
     particles.push({
       x: Math.random() * window.innerWidth,
       y: Math.random() * window.innerHeight,
-      vx: (Math.random() - .5) * .5,
-      vy: (Math.random() - .5) * .5,
+      vx: (Math.random() - .5) * .4,
+      vy: (Math.random() - .5) * .4,
       r: Math.random() * 2 + .5,
       a: Math.random()
     });
   }
 
   function drawParticles() {
+    var lp = document.getElementById('login-page');
+    // If login page is hidden (e.g. user is in exam or dashboard), sleep loop
+    if (lp && lp.classList.contains('hidden')) {
+      animFrame = setTimeout(drawParticles, 1000);
+      return;
+    }
+
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     /* Hexagonal grid */
     ctx.strokeStyle = 'rgba(56,189,248,0.04)';
     ctx.lineWidth = 1;
-    var hex = 50;
+    var hex = 60;
     for (var hx = -hex; hx < canvas.width + hex*2; hx += hex*1.5) {
       for (var hy = -hex; hy < canvas.height + hex*2; hy += hex * Math.sqrt(3)) {
         var offset = (Math.floor(hx / (hex * 1.5)) % 2) * hex * Math.sqrt(3) / 2;
@@ -59,8 +66,8 @@
         var dx = particles[i].x - particles[j].x;
         var dy = particles[i].y - particles[j].y;
         var dist = Math.sqrt(dx*dx + dy*dy);
-        if (dist < 100) {
-          ctx.strokeStyle = 'rgba(56,189,248,' + (.15 * (1 - dist/100)) + ')';
+        if (dist < 90) {
+          ctx.strokeStyle = 'rgba(56,189,248,' + (.15 * (1 - dist/90)) + ')';
           ctx.beginPath();
           ctx.moveTo(particles[i].x, particles[i].y);
           ctx.lineTo(particles[j].x, particles[j].y);
@@ -84,7 +91,7 @@ function drawHex(ctx, x, y, r) {
 }
 
 /* =====================================================
-   WAVEFORM ANIMATION
+   WAVEFORM ANIMATION (OPTIMIZED - NO REFLOW)
 ===================================================== */
 var waveOffset = 0;
 var waveInterval = null;
@@ -93,29 +100,32 @@ function startWaveform() {
   var canvas = document.getElementById('waveform-canvas');
   if (!canvas) return;
   var ctx = canvas.getContext('2d');
+  
+  var w = canvas.offsetWidth || 160;
+  var h = 36;
+  if (canvas.width !== w) canvas.width = w;
+  if (canvas.height !== h) canvas.height = h;
+
+  clearInterval(waveInterval);
   waveInterval = setInterval(function() {
-    var w = canvas.offsetWidth; var h = 36;
-    canvas.width = w; canvas.height = h;
-    ctx.clearRect(0, 0, w, h);
-    waveOffset += .08;
+    if (!examActive) {
+      clearInterval(waveInterval);
+      return;
+    }
+    var currentW = canvas.offsetWidth || 160;
+    if (canvas.width !== currentW) canvas.width = currentW;
+    ctx.clearRect(0, 0, currentW, 36);
+
+    waveOffset += .1;
     ctx.beginPath();
     ctx.strokeStyle = examActive ? 'rgba(34,197,94,0.7)' : 'rgba(56,189,248,0.4)';
     ctx.lineWidth = 1.5;
-    for (var x = 0; x < w; x++) {
-      var y = h/2 + Math.sin(x * .06 + waveOffset) * 7 + Math.sin(x * .12 + waveOffset * 1.3) * 4;
+    for (var x = 0; x < currentW; x += 3) {
+      var y = 18 + Math.sin(x * .06 + waveOffset) * 6 + Math.sin(x * .12 + waveOffset * 1.3) * 3;
       if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
     }
     ctx.stroke();
-    /* Second wave */
-    ctx.beginPath();
-    ctx.strokeStyle = 'rgba(56,189,248,0.25)';
-    for (var x = 0; x < w; x++) {
-      var y = h/2 + Math.sin(x * .04 + waveOffset * .7) * 5 + Math.sin(x * .09 + waveOffset * 1.8) * 3;
-      if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-    }
-    ctx.stroke();
-  }, 40);
+  }, 80);
 }
 
 function stopWaveform() { clearInterval(waveInterval); waveInterval = null; }
-

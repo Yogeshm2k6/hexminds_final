@@ -2875,11 +2875,19 @@ window.drawFaceTrackingHUD = function() {
   var hud = document.getElementById('cam-face-hud');
   var vid = document.getElementById('cam-video');
   if (!hud || !vid) return;
+
+  // Throttle HUD rendering to ~30 FPS to eliminate main-thread lag
+  var nowMs = Date.now();
+  if (window._lastHudDraw && (nowMs - window._lastHudDraw < 33)) return;
+  window._lastHudDraw = nowMs;
+
   var ctx = hud.getContext('2d');
   if (!ctx) return;
   
-  var w = hud.width = 320;
-  var h = hud.height = 240;
+  var w = 320;
+  var h = 240;
+  if (hud.width !== 320) hud.width = 320;
+  if (hud.height !== 240) hud.height = 240;
   ctx.clearRect(0, 0, w, h);
   
   var data = window._latestFaceTrackingData || { faces: [], consensus: 1, gazeStatus: { text: 'Calibrating...' }, phonePreds: [] };
@@ -3031,15 +3039,18 @@ initFaceDetection = function(vid) {
   setupCamHUD(vid);
   
   if (faceLoopInterval) clearInterval(faceLoopInterval);
+  window._mlDetectBusy = false;
   
-  // Start continuous face detection loop immediately (200ms = 5 checks/sec)
+  // Non-blocking face detection loop (750ms interval gives smooth detection without CPU choking)
   faceLoopInterval = setInterval(function() {
     if (!vid || !examActive || vid.readyState < 2) return;
     runMLDetection(vid);
-  }, 200);
+  }, 750);
   
   // Immediate first tick
-  runMLDetection(vid);
+  setTimeout(function() {
+    if (examActive && vid && vid.readyState >= 2) runMLDetection(vid);
+  }, 100);
   
   // Load models in background
   loadMLModels(function() {
@@ -3070,11 +3081,17 @@ function ensureCocoSsdLoaded() {
 
 // Override runMLDetection to continuously perform face detection, gaze tracking, and HUD updating
 runMLDetection = function(vid) {
-  if (!vid || vid.readyState < 2) return;
+  if (!vid || !examActive || vid.readyState < 2) return;
+  if (window._mlDetectBusy) return; // Prevent overlapping ML inference tasks!
+  window._mlDetectBusy = true;
+
   ensureCocoSsdLoaded();
   window._hudFrameCount = (window._hudFrameCount || 0) + 1;
   
-  try { _faceDetectCtx.drawImage(vid, 0, 0, 320, 240); } catch(e) { return; }
+  try { _faceDetectCtx.drawImage(vid, 0, 0, 320, 240); } catch(e) {
+    window._mlDetectBusy = false;
+    return;
+  }
   
   var facePromise = _blazefaceModel
     ? _blazefaceModel.estimateFaces(_faceDetectCanvas, false)
@@ -3097,16 +3114,21 @@ runMLDetection = function(vid) {
             probability: [0.95]
           }])
       );
-  var objPromise = _cocoSsdModel ? _cocoSsdModel.detect(vid) : Promise.resolve(null);
 
-  // Invoke non-blocking continuous biometric identity check
+  // Alternate heavy COCO-SSD phone detection every 2nd frame (~1.5s) to save CPU
+  var shouldCheckPhone = _cocoSsdModel && (window._hudFrameCount % 2 === 0);
+  var objPromise = shouldCheckPhone ? _cocoSsdModel.detect(vid) : Promise.resolve(window._lastPhonePreds || null);
+
+  // Invoke candidate biometric verification (throttled every 3.5s internally)
   if (typeof checkContinuousIdentityVerification === 'function') {
     checkContinuousIdentityVerification(vid);
   }
 
   Promise.all([facePromise, objPromise]).then(function(results) {
+    window._mlDetectBusy = false;
     var faces = results[0];
     var preds = results[1];
+    if (preds) window._lastPhonePreds = preds;
 
     var faceCount = 0;
     var validFaces = [];
@@ -3245,7 +3267,9 @@ runMLDetection = function(vid) {
       phonePreds: phonePreds,
       timestamp: Date.now()
     };
-  }).catch(function(e) {});
+  }).catch(function(e) {
+    window._mlDetectBusy = false;
+  });
 };
 
 // Continuous Non-Blocking Candidate Biometric Verification Engine
@@ -3254,7 +3278,8 @@ checkContinuousIdentityVerification = function(vid) {
   if (window._bioFetchPending) return; // Non-blocking: skip if previous network verification is still in flight
   
   var now = Date.now();
-  if (now - _lastBiometricCheck < 750) return; // Sample every 750ms
+  // Throttle cloud ArcFace verification to every 3.5 seconds (3500ms) to prevent network lag spikes
+  if (now - _lastBiometricCheck < 3500) return;
   _lastBiometricCheck = now;
   window._bioCheckCount = (window._bioCheckCount || 0) + 1;
 
@@ -3294,22 +3319,26 @@ checkContinuousIdentityVerification = function(vid) {
   var compareStatus = document.getElementById('live-profile-compare-status');
   var camBox = document.getElementById('cam-box');
 
+  // Lightweight 320x240 frame canvas (90% smaller payload: ~18KB instead of ~250KB!)
   if (!_bioCanvas) {
     _bioCanvas = document.createElement('canvas');
-    _bioCanvas.width = 640;
-    _bioCanvas.height = 480;
+    _bioCanvas.width = 320;
+    _bioCanvas.height = 240;
     _bioCtx = _bioCanvas.getContext('2d');
   }
 
   try {
-    _bioCtx.drawImage(vid, 0, 0, 640, 480);
-    var frameDataUrl = _bioCanvas.toDataURL('image/jpeg', 0.85);
+    _bioCtx.drawImage(vid, 0, 0, 320, 240);
+    var frameDataUrl = _bioCanvas.toDataURL('image/jpeg', 0.65);
 
     window._bioFetchPending = true;
     
-    // Use AbortController timeout of 1200ms so fetches never get stuck
+    // AbortController timeout of 4500ms
     var controller = new AbortController();
-    var timeoutId = setTimeout(function() { controller.abort(); }, 1200);
+    var timeoutId = setTimeout(function() { 
+      try { controller.abort(); } catch(e){} 
+      window._bioFetchPending = false;
+    }, 4500);
 
     var patchVerifyUrl = (typeof window.getBiometricsBaseUrl === 'function' ? window.getBiometricsBaseUrl() : 'https://hexminds-final-backend.onrender.com') + '/api/biometrics/verify';
     fetch(patchVerifyUrl, {
