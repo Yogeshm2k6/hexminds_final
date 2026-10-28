@@ -1,0 +1,7 @@
+backend/
+*.py
+requirements.txt
+Procfile
+render.yaml
+scratch/
+*.tex
