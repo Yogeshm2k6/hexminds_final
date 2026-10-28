@@ -1544,6 +1544,10 @@ var calibratedBaselines = null;
 var smoothedNoseRatio = null;
 var smoothedEyeNoseY = null;
 var smoothedEyeDist = null;
+var smoothedNoseOffsetX = null;
+var smoothedNoseOffsetY = null;
+window.gazeWarningCount = 0;
+window.MAX_GAZE_WARNINGS = 25;
 
 // Helper to format 24h string (HH:MM) to AM/PM format
 function formatTime(tStr) {
@@ -2095,6 +2099,14 @@ startExam = function(id) {
   multipleFacesAutoSubmitted = false;
   phoneDetected = false;
   _impersonationFrames = 0;
+  window.gazeWarningCount = 0;
+  gazeAwayConsecutive = 0;
+  gazeWarningCooldown = 0;
+  faceCalibrated = false;
+  calibrationFrames = [];
+  calibratedBaselines = null;
+  smoothedNoseOffsetX = null;
+  smoothedNoseOffsetY = null;
   _impersonationViolationLogged = false;
 
   /* Load candidate biometric descriptor and photo if not attached */
@@ -2292,60 +2304,81 @@ renderExam = function(id) {
    GAZE LOOK-AWAY & PHONE DETECTION OVERRIDES
 ===================================================== */
 
-// Override checkGazeAway to make Gaze Diversion a real violation (not just a warning)
+// Override checkGazeAway: 25-warning rule with exit and auto-submit
+window.gazeWarningCount = 0;
+window.MAX_GAZE_WARNINGS = 25;
+
 checkGazeAway = function(isAway) {
   if (!examActive) { gazeAwayConsecutive = 0; return; }
+  if (typeof window.gazeWarningCount === 'undefined') window.gazeWarningCount = 0;
+  if (typeof window.MAX_GAZE_WARNINGS === 'undefined') window.MAX_GAZE_WARNINGS = 25;
   if (gazeWarningCooldown > 0) gazeWarningCooldown--;
+
   if (isAway) {
     gazeAwayConsecutive++;
-    /* Require ~3 consecutive frames (~2 s) to avoid blinks */
-    if (gazeAwayConsecutive >= 3 && gazeWarningCooldown === 0) {
-      gazeWarningCooldown = 8; /* Cooldown in seconds before next violation can trigger */
+    /* Require at least 4 consecutive frames (~3 s) of continuous look-away to avoid saccades/blinks */
+    if (gazeAwayConsecutive >= 4 && gazeWarningCooldown === 0) {
+      window.gazeWarningCount++;
+      gazeWarningCooldown = 6; /* Cooldown frames before next warning can register */
       
-      violationCount++;
-      var vc = document.getElementById('viol-count'); if (vc) vc.textContent = violationCount;
+      var remaining = Math.max(0, window.MAX_GAZE_WARNINGS - window.gazeWarningCount);
       
       var bar = document.getElementById('cam-viol-bar');
       if (bar) { 
         bar.classList.add('visible'); 
-        bar.textContent = '👀  LOOK AT THE SCREEN — Gaze diverted'; 
-        bar.style.background = 'rgba(239,68,68,0.85)'; 
+        bar.textContent = '👀 LOOK AT SCREEN — Gaze Warning ' + window.gazeWarningCount + '/' + window.MAX_GAZE_WARNINGS + ' (' + remaining + ' left before auto-submit)'; 
+        bar.style.background = window.gazeWarningCount >= 20 ? 'rgba(239,68,68,0.92)' : 'rgba(245,158,11,0.88)'; 
       }
-      setCamStatus('⚠ Gaze diverted — violation logged', 'red');
+      setCamStatus('⚠ Gaze Diverted (' + window.gazeWarningCount + '/' + window.MAX_GAZE_WARNINGS + ')', window.gazeWarningCount >= 20 ? 'red' : 'amber');
       
       var examCode = 'CS101';
       if (typeof currentExamId !== 'undefined' && currentExamId) {
-        var activeEx = studentExams.find(function(e){ return e.id === currentExamId; }) || EXAMS.find(function(e){ return e.id === currentExamId; });
+        var activeEx = (studentExams || []).find(function(e){ return String(e.id) === String(currentExamId); }) || (EXAMS || []).find(function(e){ return String(e.id) === String(currentExamId); });
         if (activeEx && activeEx.code) examCode = activeEx.code;
       }
       
       var v = {
-        type: 'Gaze Diverted',
+        type: 'Gaze Diverted (Warning ' + window.gazeWarningCount + '/' + window.MAX_GAZE_WARNINGS + ')',
         time: new Date().toLocaleTimeString(),
         exam: examCode,
-        severity: 'medium',
-        desc: 'Student is looking away from the screen (gaze diverted).',
-        photo: captureViolationPhoto()
+        severity: window.gazeWarningCount >= 20 ? 'high' : 'low',
+        desc: 'Candidate diverted gaze away from screen. Gaze warning ' + window.gazeWarningCount + ' of ' + window.MAX_GAZE_WARNINGS + '.',
+        photo: typeof captureViolationPhoto === 'function' ? captureViolationPhoto() : null
       };
       sessionViolations.push(v);
       if (currentStudent.name && LIVE_SESSIONS[currentStudent.name]) {
         LIVE_SESSIONS[currentStudent.name].violations.push(v);
       }
-      updateSuspicionScore(20);
       
-      showViolationAlert('👀 Gaze Diverted Detected',
-        'Please keep your eyes on the screen. Looking away is a security violation.', false);
+      showViolationAlert('👀 Gaze Warning (' + window.gazeWarningCount + '/' + window.MAX_GAZE_WARNINGS + ')',
+        'Please keep your eyes focused on your exam screen. Warning ' + window.gazeWarningCount + ' of ' + window.MAX_GAZE_WARNINGS + '. Exam will auto-submit after ' + window.MAX_GAZE_WARNINGS + ' warnings.', false);
         
-      /* Save to DB */
-      recordPersistentViolation(currentStudent.name || 'Unknown', v);
+      /* Save to persistent record */
+      if (typeof recordPersistentViolation === 'function') {
+        recordPersistentViolation(currentStudent.name || 'Unknown', v);
+      }
       
-      checkAutoSubmit();
+      /* Gaze gives minimum 25 warnings then exits and auto-submits */
+      if (window.gazeWarningCount >= window.MAX_GAZE_WARNINGS) {
+        if (bar) {
+          bar.classList.add('visible');
+          bar.textContent = '⛔ 25 GAZE WARNINGS EXCEEDED — AUTO-SUBMITTING EXAM NOW';
+          bar.style.background = 'rgba(220,38,38,0.98)';
+        }
+        setCamStatus('⛔ 25 Gaze Warnings Limit Exceeded — Auto-submitting', 'red');
+        if (typeof startAutoSubmitCountdown === 'function') {
+          startAutoSubmitCountdown('25 Gaze Warnings Limit Exceeded');
+        } else {
+          alert('⛔ Maximum Gaze Warnings Exceeded (' + window.MAX_GAZE_WARNINGS + '/' + window.MAX_GAZE_WARNINGS + ').\n\nYour exam is being automatically submitted.');
+          submitExam(true);
+        }
+      }
     }
   } else {
     if (gazeAwayConsecutive > 0) {
       gazeAwayConsecutive = 0;
       var bar2 = document.getElementById('cam-viol-bar');
-      if (bar2 && bar2.textContent.indexOf('LOOK AT THE SCREEN') !== -1) {
+      if (bar2 && bar2.textContent.indexOf('LOOK AT SCREEN') !== -1) {
         bar2.classList.remove('visible');
       }
     }
@@ -3326,7 +3359,7 @@ runMLDetection = function(vid) {
 
     var gazeStatus = { text: 'Looking Straight', isDiverted: false };
 
-    // Dynamic head movement estimation
+    // Dynamic head movement estimation (Robust & natural tolerance)
     if (consensus === 1 && validFaces && validFaces.length === 1) {
       var f = validFaces[0];
       var tl = f.topLeft, br = f.bottomRight;
@@ -3337,73 +3370,68 @@ runMLDetection = function(vid) {
         var lEye = f.landmarks[1];
         var nose = f.landmarks[2];
         
-        var eyeY = (rEye[1] + lEye[1]) / 2;
-        var rawEyeNoseY = (nose[1] - eyeY) / Math.max(1, fh);
-        var leftDist = Math.abs(nose[0] - lEye[0]);
-        var rightDist = Math.abs(nose[0] - rEye[0]);
-        var rawNoseRatio = leftDist / Math.max(1, rightDist);
-        var rawEyeDist = Math.abs(rEye[0] - lEye[0]) / Math.max(1, fw);
+        var eyeMidX = (rEye[0] + lEye[0]) / 2;
+        var eyeMidY = (rEye[1] + lEye[1]) / 2;
+        var eyeDist = Math.max(1, Math.hypot(rEye[0] - lEye[0], rEye[1] - lEye[1]));
         
-        // Apply Exponential Moving Average (EMA) smoothing
-        if (smoothedNoseRatio === null) {
-          smoothedNoseRatio = rawNoseRatio;
-          smoothedEyeNoseY = rawEyeNoseY;
-          smoothedEyeDist = rawEyeDist;
+        // Normalized horizontal yaw offset (nose relative to eye midpoint)
+        var rawNoseOffsetX = (nose[0] - eyeMidX) / eyeDist;
+        // Normalized vertical pitch offset
+        var rawNoseOffsetY = (nose[1] - eyeMidY) / eyeDist;
+        
+        // Apply Exponential Moving Average (EMA) smoothing (alpha = 0.25)
+        if (smoothedNoseOffsetX === null) {
+          smoothedNoseOffsetX = rawNoseOffsetX;
+          smoothedNoseOffsetY = rawNoseOffsetY;
         } else {
           var alpha = 0.25;
-          smoothedNoseRatio = alpha * rawNoseRatio + (1 - alpha) * smoothedNoseRatio;
-          smoothedEyeNoseY = alpha * rawEyeNoseY + (1 - alpha) * smoothedEyeNoseY;
-          smoothedEyeDist = alpha * rawEyeDist + (1 - alpha) * smoothedEyeDist;
+          smoothedNoseOffsetX = alpha * rawNoseOffsetX + (1 - alpha) * smoothedNoseOffsetX;
+          smoothedNoseOffsetY = alpha * rawNoseOffsetY + (1 - alpha) * smoothedNoseOffsetY;
         }
         
         var fmsLabel = document.getElementById('face-model-s');
         
-        // Calibration phase (first 5 frames)
+        // Calibration phase (first 8 frames)
         if (!faceCalibrated) {
-          calibrationFrames.push({ noseRatio: smoothedNoseRatio, eyeNoseY: smoothedEyeNoseY, eyeDist: smoothedEyeDist });
-          var progress = Math.round((calibrationFrames.length / 5) * 100);
+          calibrationFrames.push({ noseOffsetX: smoothedNoseOffsetX, noseOffsetY: smoothedNoseOffsetY });
+          var progress = Math.round((calibrationFrames.length / 8) * 100);
           if (fmsLabel) {
-            fmsLabel.innerHTML = '<span style="color:var(--amber);font-weight:700">⚖ Calibrating face position: ' + progress + '%</span>';
+            fmsLabel.innerHTML = '<span style="color:var(--amber);font-weight:700">⚖ Calibrating natural posture: ' + progress + '%</span>';
           }
           
-          if (calibrationFrames.length >= 5) {
-            var sumNR = 0, sumEN = 0, sumED = 0;
+          if (calibrationFrames.length >= 8) {
+            var sumX = 0, sumY = 0;
             calibrationFrames.forEach(function(cf){
-              sumNR += cf.noseRatio;
-              sumEN += cf.eyeNoseY;
-              sumED += cf.eyeDist;
+              sumX += cf.noseOffsetX;
+              sumY += cf.noseOffsetY;
             });
             calibratedBaselines = {
-              noseRatio: sumNR / calibrationFrames.length,
-              eyeNoseY: sumEN / calibrationFrames.length,
-              eyeDist: sumED / calibrationFrames.length
+              noseOffsetX: sumX / calibrationFrames.length,
+              noseOffsetY: sumY / calibrationFrames.length
             };
             faceCalibrated = true;
           }
           checkGazeAway(false);
         } else {
-          // Deviation from calibrated straight baseline
-          var diffRatio = smoothedNoseRatio - calibratedBaselines.noseRatio;
-          var diffVert = smoothedEyeNoseY - calibratedBaselines.eyeNoseY;
-          var diffDist = smoothedEyeDist - calibratedBaselines.eyeDist;
+          // Deviation from calibrated natural baseline
+          var diffYaw = smoothedNoseOffsetX - calibratedBaselines.noseOffsetX;
+          var diffPitch = smoothedNoseOffsetY - calibratedBaselines.noseOffsetY;
           
           var headStatusText = 'Looking straight';
           var lookingAway = false;
           
-          if (diffRatio < -0.22) {
+          // Generous thresholds that allow full, comfortable reading of screen without false alarms
+          if (diffYaw < -0.38) {
             headStatusText = 'Turned Left';
             lookingAway = true;
-          } else if (diffRatio > 0.22) {
+          } else if (diffYaw > 0.38) {
             headStatusText = 'Turned Right';
             lookingAway = true;
-          } else if (diffVert < -0.035) {
+          } else if (diffPitch > 0.38) {
             headStatusText = 'Looking Down';
             lookingAway = true;
-          } else if (diffVert > 0.045) {
+          } else if (diffPitch < -0.32) {
             headStatusText = 'Looking Up';
-            lookingAway = true;
-          } else if (diffDist < -0.060) {
-            headStatusText = 'Head Turned';
             lookingAway = true;
           }
           
@@ -3412,9 +3440,9 @@ runMLDetection = function(vid) {
           if (fmsLabel) {
             var bioMatch = window._lastBioResult ? (window._lastBioResult.match_percentage || 96) : 96;
             if (lookingAway) {
-              fmsLabel.innerHTML = '🔴 Continuous AI: <strong style="color:var(--red)">' + headStatusText + '</strong> · Frame #' + window._hudFrameCount;
+              fmsLabel.innerHTML = '🔴 Continuous AI: <strong style="color:var(--red)">' + headStatusText + '</strong> · Warning ' + (window.gazeWarningCount || 0) + '/' + (window.MAX_GAZE_WARNINGS || 25);
             } else {
-              fmsLabel.innerHTML = '🟢 Continuous AI: <strong style="color:var(--green)">' + headStatusText + '</strong> · Match ' + bioMatch + '% · Frame #' + window._hudFrameCount;
+              fmsLabel.innerHTML = '🟢 Continuous AI: <strong style="color:var(--green)">' + headStatusText + '</strong> · Match ' + bioMatch + '% · Warnings ' + (window.gazeWarningCount || 0) + '/' + (window.MAX_GAZE_WARNINGS || 25);
             }
           }
           checkGazeAway(lookingAway);

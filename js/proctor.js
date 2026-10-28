@@ -151,31 +151,46 @@ function clearAutoSubmitCountdown() {
 /* =====================================================
    FACE RESULT HANDLER
 ===================================================== */
-/* GAZE / LOOK-AWAY — soft warning only, no auto-submit, no violation increment */
+/* GAZE / LOOK-AWAY — 25 warnings rule then exit and auto-submit */
 function checkGazeAway(isAway) {
   if (!examActive) { gazeAwayConsecutive = 0; return; }
+  if (typeof gazeWarningCount === 'undefined') gazeWarningCount = 0;
+  if (typeof MAX_GAZE_WARNINGS === 'undefined') MAX_GAZE_WARNINGS = 25;
   if (gazeWarningCooldown > 0) gazeWarningCooldown--;
   if (isAway) {
     gazeAwayConsecutive++;
-    /* Require ~3 consecutive frames (~2 s) to avoid false positives from blinks/small movements */
-    if (gazeAwayConsecutive === 4 && gazeWarningCooldown === 0) {
-      gazeWarningCooldown = 12; /* ~8 s before next warning */
+    /* Require 4 consecutive frames (~3 s) to avoid false positives from blinks/normal reading */
+    if (gazeAwayConsecutive >= 4 && gazeWarningCooldown === 0) {
+      gazeWarningCount++;
+      gazeWarningCooldown = 6; /* Cooldown frames before next warning */
+      var remaining = Math.max(0, MAX_GAZE_WARNINGS - gazeWarningCount);
       var bar = document.getElementById('cam-viol-bar');
-      if (bar) { bar.classList.add('visible'); bar.textContent = '👀  LOOK AT THE SCREEN — Gaze diverted'; bar.style.background = 'rgba(245,158,11,0.78)'; }
-      setCamStatus('⚠ Please look at the camera — keep your eyes on the screen', 'red');
-      showViolationAlert('👀 Look Away Warning',
-        'Please keep your eyes on the screen. Repeated look-aways will be logged as a violation.', false);
+      if (bar) { 
+        bar.classList.add('visible'); 
+        bar.textContent = '👀 LOOK AT SCREEN — Gaze Warning ' + gazeWarningCount + '/' + MAX_GAZE_WARNINGS + ' (' + remaining + ' left before auto-submit)'; 
+        bar.style.background = gazeWarningCount >= 20 ? 'rgba(239,68,68,0.92)' : 'rgba(245,158,11,0.85)'; 
+      }
+      setCamStatus('⚠ Gaze Warning (' + gazeWarningCount + '/' + MAX_GAZE_WARNINGS + ')', gazeWarningCount >= 20 ? 'red' : 'amber');
+      showViolationAlert('👀 Gaze Warning (' + gazeWarningCount + '/' + MAX_GAZE_WARNINGS + ')',
+        'Please keep your eyes focused on your screen. Warning ' + gazeWarningCount + ' of ' + MAX_GAZE_WARNINGS + '. Exam will auto-submit after ' + MAX_GAZE_WARNINGS + ' warnings.', false);
       try {
-        logViolation('Gaze Diverted (Warning)',
-          'Student is not looking at the screen. Soft warning issued — no violation counted.', 'low');
+        logViolation('Gaze Diverted (Warning ' + gazeWarningCount + '/' + MAX_GAZE_WARNINGS + ')',
+          'Candidate looking away from screen. Gaze warning ' + gazeWarningCount + ' of ' + MAX_GAZE_WARNINGS + '.', gazeWarningCount >= 20 ? 'medium' : 'low');
       } catch(e) {}
+      
+      if (gazeWarningCount >= MAX_GAZE_WARNINGS) {
+        if (typeof startAutoSubmitCountdown === 'function') {
+          startAutoSubmitCountdown('25 Gaze Warnings Limit Exceeded');
+        } else {
+          submitExam(true);
+        }
+      }
     }
   } else {
     if (gazeAwayConsecutive > 0) {
       gazeAwayConsecutive = 0;
       var bar2 = document.getElementById('cam-viol-bar');
-      /* Only clear the warning bar if it was set by gaze (orange) and no other alert is active */
-      if (bar2 && bar2.textContent.indexOf('LOOK AT THE SCREEN') !== -1) {
+      if (bar2 && bar2.textContent.indexOf('LOOK AT SCREEN') !== -1) {
         bar2.classList.remove('visible');
       }
     }

@@ -211,7 +211,12 @@ function runMLDetection(vid) {
         var noseDy = (nose[1] - cy) / Math.max(1, fh);
         var eyeDist = Math.abs(rEye[0] - lEye[0]) / Math.max(1, fw);
         /* Looking away: nose horizontally far from center, vertically tilted, or eyes squeezed (head turn) */
-        var lookingAway = Math.abs(noseDx) > 0.18 || noseDy < -0.15 || noseDy > 0.25 || eyeDist < 0.22;
+        var eyeMidX = (rEye[0] + lEye[0]) / 2;
+        var eyeMidY = (rEye[1] + lEye[1]) / 2;
+        var eyeDistTrue = Math.max(1, Math.hypot(rEye[0] - lEye[0], rEye[1] - lEye[1]));
+        var noseOffsetH = (nose[0] - eyeMidX) / eyeDistTrue;
+        var noseOffsetV = (nose[1] - eyeMidY) / eyeDistTrue;
+        var lookingAway = Math.abs(noseOffsetH) > 0.40 || noseOffsetV < 0.20 || noseOffsetV > 1.15;
         checkGazeAway(lookingAway);
       } else {
         checkGazeAway(false);

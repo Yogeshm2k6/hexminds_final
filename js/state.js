@@ -143,6 +143,8 @@ var suspicionScore = 0; /* 0–100 suspicion percentage */
 var MAX_VIOLATIONS = 5; /* General violation auto-submit threshold (multi-face / phone / no-face are INSTANT) */
 var gazeAwayConsecutive = 0;
 var gazeWarningCooldown = 0;
+var gazeWarningCount = 0;
+var MAX_GAZE_WARNINGS = 25;
 
 /* Face Verification State */
 var fvStream = null;
