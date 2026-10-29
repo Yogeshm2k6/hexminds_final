@@ -84,8 +84,8 @@ function loadMLModels(onReady) {
 function initFaceDetection(vid) {
   /* Shared canvas for frame sampling */
   _faceDetectCanvas = document.createElement('canvas');
-  _faceDetectCanvas.width  = 320;
-  _faceDetectCanvas.height = 240;
+  _faceDetectCanvas.width  = 480;
+  _faceDetectCanvas.height = 360;
   _faceDetectCtx = _faceDetectCanvas.getContext('2d');
 
   /* Try native FaceDetector (Chrome experimental) first — fastest */
@@ -161,7 +161,7 @@ function runMLDetection(vid) {
   var facePromise = _blazefaceModel
     ? _blazefaceModel.estimateFaces(_faceDetectCanvas, false /* returnTensors */)
     : Promise.resolve(null);
-  var objPromise = _cocoSsdModel ? _cocoSsdModel.detect(_faceDetectCanvas || vid, 20, 0.22) : Promise.resolve(null);
+  var objPromise = _cocoSsdModel ? _cocoSsdModel.detect(_faceDetectCanvas || vid, 20, 0.18) : Promise.resolve(null);
 
   // Invoke continuous ArcFace biometrics check on every live frame cycle
   if (typeof checkContinuousIdentityVerification === 'function') {
@@ -532,7 +532,7 @@ function checkPhoneInPredictions(preds) {
   if (!preds || phoneDetected || !examActive) return;
   var found = preds.filter(function(p) {
     var cls = (p.class || '').toLowerCase().trim();
-    return PHONE_CLASSES.indexOf(cls) !== -1 && p.score >= 0.22;
+    return PHONE_CLASSES.indexOf(cls) !== -1 && p.score >= 0.18;
   });
   if (found.length > 0) {
     var best = found.reduce(function(a,b){ return a.score > b.score ? a : b; });

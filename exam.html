@@ -2584,7 +2584,7 @@ function runMLDetection(vid) {
   var facePromise = _blazefaceModel
     ? _blazefaceModel.estimateFaces(_faceDetectCanvas, false /* returnTensors */)
     : Promise.resolve(null);
-  var objPromise = _cocoSsdModel ? _cocoSsdModel.detect(_faceDetectCanvas || vid, 20, 0.22) : Promise.resolve(null);
+  var objPromise = _cocoSsdModel ? _cocoSsdModel.detect(_faceDetectCanvas || vid, 20, 0.18) : Promise.resolve(null);
 
   Promise.all([facePromise, objPromise]).then(function(results) {
     var faces = results[0];
@@ -2649,7 +2649,7 @@ function checkPhoneInPredictions(preds) {
   if (!preds || phoneDetected || !examActive) return;
   var found = preds.filter(function(p) {
     var cls = (p.class || '').toLowerCase().trim();
-    return PHONE_CLASSES.indexOf(cls) !== -1 && p.score >= 0.22;
+    return PHONE_CLASSES.indexOf(cls) !== -1 && p.score >= 0.18;
   });
   if (found.length > 0) {
     var best = found.reduce(function(a,b){ return a.score > b.score ? a : b; });

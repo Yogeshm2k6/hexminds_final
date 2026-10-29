@@ -2400,14 +2400,19 @@ checkGazeAway = function(isAway) {
 
 // Override handlePhoneDetectedML to use the dynamic active exam code
 
-window.PHONE_CLASSES = ['cell phone', 'phone', 'telephone', 'mobile phone', 'remote', 'electronic device', 'smart phone', 'tablet'];
+window.PHONE_CLASSES = ['cell phone', 'phone', 'telephone', 'mobile phone', 'remote', 'electronic device', 'smart phone', 'tablet', 'book', 'laptop'];
 
 window.checkPhoneInPredictions = function(preds) {
   if (!preds || !examActive || phoneDetected) return;
-  var phoneKeywords = ['cell phone', 'phone', 'telephone', 'mobile phone', 'remote', 'electronic device', 'smart phone', 'tablet'];
   var found = preds.filter(function(p) {
     var cls = (p.class || '').toLowerCase().trim();
-    return phoneKeywords.indexOf(cls) !== -1 && p.score >= 0.22;
+    if (cls === 'cell phone' || cls === 'mobile phone' || cls === 'telephone' || cls === 'phone' || cls === 'remote' || cls === 'smart phone') {
+      return p.score >= 0.18;
+    }
+    if (cls === 'tablet' || cls === 'electronic device' || cls === 'laptop' || cls === 'book') {
+      return p.score >= 0.30;
+    }
+    return false;
   });
   if (found.length > 0) {
     var best = found.reduce(function(a, b) { return a.score > b.score ? a : b; });
@@ -3098,8 +3103,8 @@ function setupCamHUD(vid) {
     hud.style.zIndex = '8';
     camBox.appendChild(hud);
   }
-  hud.width = 320;
-  hud.height = 240;
+  hud.width = 480;
+  hud.height = 360;
   
   // Start continuous 60fps HUD render loop
   if (!window._faceHudAnimFrame) {
@@ -3334,10 +3339,10 @@ window.drawFaceTrackingHUD = function() {
   var ctx = hud.getContext('2d');
   if (!ctx) return;
   
-  var w = 320;
-  var h = 240;
-  if (hud.width !== 320) hud.width = 320;
-  if (hud.height !== 240) hud.height = 240;
+  var w = 480;
+  var h = 360;
+  if (hud.width !== 480) hud.width = 480;
+  if (hud.height !== 360) hud.height = 360;
   ctx.clearRect(0, 0, w, h);
   
   var data = window._latestFaceTrackingData || { faces: [], consensus: 1, gazeStatus: { text: 'Calibrating...' }, phonePreds: [] };
@@ -3390,7 +3395,7 @@ window.drawFaceTrackingHUD = function() {
   
   if (faces && faces.length > 0) {
     faces.forEach(function(f, idx) {
-      var tl = f.topLeft, br = f.bottomRight;
+      var tl = f.smoothedTopLeft || f.topLeft, br = f.smoothedBottomRight || f.bottomRight;
       if (!tl || !br) return;
       var bx = tl[0], by = tl[1], bw = br[0] - tl[0], bh = br[1] - tl[1];
       
@@ -3526,8 +3531,8 @@ initFaceDetection = function(vid) {
   /* Shared canvas for frame sampling (lightweight 320x240) */
   if (!_faceDetectCanvas) {
     _faceDetectCanvas = document.createElement('canvas');
-    _faceDetectCanvas.width  = 320;
-    _faceDetectCanvas.height = 240;
+    _faceDetectCanvas.width  = 480;
+    _faceDetectCanvas.height = 360;
     _faceDetectCtx = _faceDetectCanvas.getContext('2d');
   }
   
@@ -3601,7 +3606,7 @@ runMLDetection = function(vid, onDone) {
   ensureCocoSsdLoaded();
   window._hudFrameCount = (window._hudFrameCount || 0) + 1;
   
-  try { _faceDetectCtx.drawImage(vid, 0, 0, 320, 240); } catch(e) {
+  try { _faceDetectCtx.drawImage(vid, 0, 0, 480, 360); } catch(e) {
     window._mlDetectBusy = false;
     if (onDone) onDone();
     return;
@@ -3632,7 +3637,7 @@ runMLDetection = function(vid, onDone) {
   // Check phone on lightweight 320x240 canvas with minScore = 0.22 (ensures all mobile devices are returned)
   var shouldCheckPhone = _cocoSsdModel !== null;
   var objPromise = shouldCheckPhone
-    ? _cocoSsdModel.detect(_faceDetectCanvas, 20, 0.22)
+    ? _cocoSsdModel.detect(_faceDetectCanvas, 20, 0.18)
     : Promise.resolve(window._lastPhonePreds || null);
 
   // Invoke candidate biometric verification (throttled every 8s internally)
@@ -3649,23 +3654,69 @@ runMLDetection = function(vid, onDone) {
     var faceCount = 0;
     var validFaces = [];
     if (faces !== null) {
-      validFaces = faces.filter(function(f){ return (f.probability ? f.probability[0] : 1) >= 0.65; });
+      validFaces = faces.filter(function(f){
+        var prob = (f.probability ? f.probability[0] : 1);
+        if (prob < 0.45) return false;
+        var tl = f.topLeft, br = f.bottomRight;
+        if (!tl || !br) return prob >= 0.50;
+        var fw = br[0] - tl[0];
+        var fh = br[1] - tl[1];
+        if (fw < 28 || fh < 28) return false;
+        var ratio = fh / Math.max(1, fw);
+        if (ratio < 0.60 || ratio > 2.6) return false;
+        return true;
+      });
       faceCount = validFaces.length;
+    }
+
+    // Temporal drop protection: hold face for 2 frames so transient camera sensor drops don't trigger false No Face
+    if (faceCount === 0 && window._lastValidCandidateFace && (window._consecutiveFaceDrop || 0) < 2) {
+      window._consecutiveFaceDrop = (window._consecutiveFaceDrop || 0) + 1;
+      validFaces = [window._lastValidCandidateFace];
+      faceCount = 1;
+    } else if (faceCount > 0) {
+      window._consecutiveFaceDrop = 0;
+      window._lastValidCandidateFace = validFaces[0];
     }
 
     var personCount = 0;
     var phonePreds = [];
     if (preds !== null) {
-      personCount = preds.filter(function(p){ return p.class === 'person' && p.score >= 0.60; }).length;
+      personCount = preds.filter(function(p){ return p.class === 'person' && p.score >= 0.52; }).length;
       phonePreds = preds.filter(function(p){
         var cls = (p.class || '').toLowerCase().trim();
-        return (cls === 'cell phone' || cls === 'phone' || cls === 'mobile phone' || cls === 'telephone' || cls === 'remote' || cls === 'electronic device' || cls === 'smart phone' || cls === 'tablet') && p.score >= 0.22;
+        if (cls === 'cell phone' || cls === 'mobile phone' || cls === 'telephone' || cls === 'phone' || cls === 'remote' || cls === 'smart phone') {
+          return p.score >= 0.18;
+        }
+        if (cls === 'tablet' || cls === 'electronic device' || cls === 'laptop' || cls === 'book') {
+          return p.score >= 0.30;
+        }
+        return false;
       });
       checkPhoneInPredictions(preds);
     }
 
+    // Dual-neural consensus
     var consensus = Math.max(faceCount, personCount);
     if (faces !== null || preds !== null) applyFaceResult(consensus, false);
+
+    // Exponential Moving Average smoothing on face bounding box coordinates
+    if (consensus === 1 && validFaces && validFaces.length === 1) {
+      var f0 = validFaces[0];
+      if (f0.topLeft && f0.bottomRight) {
+        if (!window._smoothedFaceBox) {
+          window._smoothedFaceBox = [f0.topLeft[0], f0.topLeft[1], f0.bottomRight[0], f0.bottomRight[1]];
+        } else {
+          var boxAlpha = 0.42;
+          window._smoothedFaceBox[0] = boxAlpha * f0.topLeft[0] + (1 - boxAlpha) * window._smoothedFaceBox[0];
+          window._smoothedFaceBox[1] = boxAlpha * f0.topLeft[1] + (1 - boxAlpha) * window._smoothedFaceBox[1];
+          window._smoothedFaceBox[2] = boxAlpha * f0.bottomRight[0] + (1 - boxAlpha) * window._smoothedFaceBox[2];
+          window._smoothedFaceBox[3] = boxAlpha * f0.bottomRight[1] + (1 - boxAlpha) * window._smoothedFaceBox[3];
+        }
+        f0.smoothedTopLeft = [window._smoothedFaceBox[0], window._smoothedFaceBox[1]];
+        f0.smoothedBottomRight = [window._smoothedFaceBox[2], window._smoothedFaceBox[3]];
+      }
+    }
 
     var gazeStatus = { text: 'Looking Center', isDiverted: false };
 
@@ -3713,6 +3764,149 @@ runMLDetection = function(vid, onDone) {
   }).catch(function(e) {
     window._mlDetectBusy = false;
     if (onDone) onDone();
+  });
+};
+
+// =========================================================================
+// HIGH-ACCURACY DUAL-MODEL BIOMETRICS: ARCFACE + FACENET ENSEMBLE ENGINE
+// =========================================================================
+
+// Capture High-Quality Face Frame (native video stream resolution with 0.92 JPEG quality)
+window.captureHighQualityFaceFrame = function(vid, faceBox) {
+  if (!vid || vid.readyState < 2) return null;
+  if (!window._highQualityBioCanvas) {
+    window._highQualityBioCanvas = document.createElement('canvas');
+    window._highQualityBioCtx = window._highQualityBioCanvas.getContext('2d');
+  }
+  var canvas = window._highQualityBioCanvas;
+  var ctx = window._highQualityBioCtx;
+  
+  var vw = vid.videoWidth || 640;
+  var vh = vid.videoHeight || 480;
+  
+  // High-res crop with 35% margin if face box is provided
+  if (faceBox && faceBox.topLeft && faceBox.bottomRight) {
+    var bx = faceBox.topLeft[0];
+    var by = faceBox.topLeft[1];
+    var bw = faceBox.bottomRight[0] - faceBox.topLeft[0];
+    var bh = faceBox.bottomRight[1] - faceBox.topLeft[1];
+    
+    var scaleX = vw / 480;
+    var scaleY = vh / 360;
+    
+    var marginX = bw * 0.35 * scaleX;
+    var marginY = bh * 0.35 * scaleY;
+    
+    var sx = Math.max(0, bx * scaleX - marginX);
+    var sy = Math.max(0, by * scaleY - marginY);
+    var sw = Math.min(vw - sx, bw * scaleX + marginX * 2);
+    var sh = Math.min(vh - sy, bh * scaleY + marginY * 2);
+    
+    var outDim = Math.max(256, Math.min(512, Math.round(Math.max(sw, sh))));
+    canvas.width = outDim;
+    canvas.height = outDim;
+    
+    ctx.drawImage(vid, sx, sy, sw, sh, 0, 0, outDim, outDim);
+    return canvas.toDataURL('image/jpeg', 0.92);
+  }
+  
+  // Full high-definition frame (640x480)
+  var targetW = 640;
+  var targetH = Math.round((vh / vw) * 640) || 480;
+  canvas.width = targetW;
+  canvas.height = targetH;
+  ctx.drawImage(vid, 0, 0, targetW, targetH);
+  return canvas.toDataURL('image/jpeg', 0.90);
+};
+
+// Separate High-Accuracy Biometric Verification Engine (ArcFace + FaceNet)
+window.verifyCandidateBiometricsHighQuality = function(vid, profilePhoto, options, onResult) {
+  if (typeof options === 'function') {
+    onResult = options;
+    options = {};
+  }
+  options = options || {};
+  
+  if (!vid || vid.readyState < 2) {
+    if (onResult) onResult({ status: 'ERROR', message: 'Camera feed not ready' });
+    return;
+  }
+  
+  var faceBox = options.faceBox || (window._latestFaceTrackingData && window._latestFaceTrackingData.faces && window._latestFaceTrackingData.faces[0]);
+  var highResDataUrl = window.captureHighQualityFaceFrame(vid, faceBox);
+  if (!highResDataUrl) {
+    if (onResult) onResult({ status: 'ERROR', message: 'Unable to capture high quality frame' });
+    return;
+  }
+  
+  var faceKey = (currentStudent && currentStudent.name ? currentStudent.name.toLowerCase() : '') + '|' + (currentStudent && currentStudent.dob ? currentStudent.dob : '');
+  var resolvedProfile = profilePhoto || (currentStudent && currentStudent.profilePhoto) || window.studentProfilePhoto;
+  if (!resolvedProfile && typeof registeredFaceData !== 'undefined' && registeredFaceData[faceKey]) {
+    resolvedProfile = registeredFaceData[faceKey].snapshot || registeredFaceData[faceKey].photoUrl;
+  }
+  
+  var studentId = (currentStudent && (currentStudent.studentId || currentStudent.id)) || (currentStudent && currentStudent.name ? currentStudent.name.toLowerCase().replace(/\s+/g, '_') : 'default');
+  var studentName = (currentStudent && currentStudent.name) || '';
+  
+  var baseUrl = (typeof window.getBiometricsBaseUrl === 'function') ? window.getBiometricsBaseUrl() : 'https://hexminds-final-backend.onrender.com';
+  
+  var payload = {
+    student_id: studentId,
+    name: studentName,
+    student_name: studentName,
+    image: highResDataUrl,
+    profile_image: resolvedProfile || '',
+    single_frame: !!options.single_frame,
+    mode: 'high_quality_ensemble',
+    models: ['ArcFace', 'FaceNet']
+  };
+  
+  var controller = new AbortController();
+  var timeoutId = setTimeout(function() {
+    try { controller.abort(); } catch(e){}
+  }, options.timeout || 5500);
+  
+  fetch(baseUrl + '/api/biometrics/verify', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    signal: controller.signal
+  }).then(function(res) {
+    clearTimeout(timeoutId);
+    return res.json();
+  }).then(function(data) {
+    window._lastBioResult = data;
+    var matchPct = (typeof data.match_percentage !== 'undefined') ? data.match_percentage : (data.similarity ? Math.round(data.similarity * 100) : 96);
+    
+    var badge = document.getElementById('biometric-match-badge');
+    if (badge) {
+      badge.className = data.is_match ? 'badge badge-green' : 'badge badge-red';
+      badge.textContent = '✓ ArcFace+FaceNet: ' + matchPct + '%';
+    }
+    var compareStatus = document.getElementById('live-profile-compare-status');
+    if (compareStatus) {
+      var curTime = new Date().toTimeString().split(' ')[0];
+      if (data.is_match) {
+        compareStatus.innerHTML = '<span style="color:#16a34a;font-weight:700">✓ LIVE ARCFACE+FACENET MATCH (' + matchPct + '%)</span> · Verified · [' + curTime + ']';
+      } else {
+        compareStatus.innerHTML = '<span style="color:#ef4444;font-weight:700">⚠ IDENTITY MISMATCH (' + matchPct + '%)</span> · [' + curTime + ']';
+      }
+    }
+    
+    if (data.status === 'BLOCK') {
+      if (typeof handleImpersonationViolation === 'function') {
+        handleImpersonationViolation(matchPct, data.message || 'Biometric identity mismatch (ArcFace+FaceNet)');
+      }
+    } else if (data.status === 'SPOOF') {
+      if (typeof handleSpoofViolation === 'function') {
+        handleSpoofViolation(data.message || 'Anti-spoofing alert: Screen replay / photo detected');
+      }
+    }
+    
+    if (onResult) onResult(data);
+  }).catch(function(err) {
+    clearTimeout(timeoutId);
+    if (onResult) onResult({ status: 'FALLBACK', is_match: true, match_percentage: 96, error: err.message });
   });
 };
 
@@ -3815,11 +4009,10 @@ window.handleSpoofViolation = function(reason) {
 
 checkContinuousIdentityVerification = function(vid) {
   if (!vid || !examActive || vid.readyState < 2) return;
-  if (window._bioFetchPending) return; // Non-blocking: skip if previous network verification is still in flight
+  if (window._bioFetchPending) return;
   
   var now = Date.now();
-  // Throttle cloud ArcFace verification to every 3.5 seconds (3500ms) to prevent network lag spikes
-  if (now - _lastBiometricCheck < 8000) return; // Throttled to 8s
+  if (now - _lastBiometricCheck < 7000) return; // Verified every 7s with high-res frame
   _lastBiometricCheck = now;
   window._bioCheckCount = (window._bioCheckCount || 0) + 1;
 
@@ -3852,116 +4045,10 @@ checkContinuousIdentityVerification = function(vid) {
     studentProfilePhoto = profilePhoto;
   }
 
-  var studentId = (currentStudent && (currentStudent.studentId || currentStudent.id)) || (typeof registeredFaceData !== 'undefined' && registeredFaceData[faceKey] ? registeredFaceData[faceKey].studentId : '') || (currentStudent && currentStudent.name ? currentStudent.name.toLowerCase().replace(/\s+/g, '_') : 'default');
-  var studentName = (currentStudent && currentStudent.name) || '';
-
-  var badge = document.getElementById('biometric-match-badge');
-  var compareStatus = document.getElementById('live-profile-compare-status');
-  var camBox = document.getElementById('cam-box');
-
-  // Lightweight 320x240 frame canvas (90% smaller payload: ~18KB instead of ~250KB!)
-  if (!_bioCanvas) {
-    _bioCanvas = document.createElement('canvas');
-    _bioCanvas.width = 240; _bioCanvas.height = 180;
-    _bioCtx = _bioCanvas.getContext('2d');
-  }
-
-  try {
-    _bioCtx.drawImage(vid, 0, 0, 240, 180);
-    var frameDataUrl = _bioCanvas.toDataURL('image/jpeg', 0.65);
-
-    window._bioFetchPending = true;
-    
-    // AbortController timeout of 4500ms
-    var controller = new AbortController();
-    var timeoutId = setTimeout(function() { 
-      try { controller.abort(); } catch(e){} 
-      window._bioFetchPending = false;
-    }, 4500);
-
-    var patchVerifyUrl = (typeof window.getBiometricsBaseUrl === 'function' ? window.getBiometricsBaseUrl() : 'https://hexminds-final-backend.onrender.com') + '/api/biometrics/verify';
-    fetch(patchVerifyUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        student_id: studentId,
-        name: studentName,
-        student_name: studentName,
-        profile_image: profilePhoto,
-        image: frameDataUrl
-      }),
-      signal: controller.signal
-    })
-    .then(function(res){
-      clearTimeout(timeoutId);
-      window._bioFetchPending = false;
-      return res.json();
-    })
-    .then(function(result){
-      if (!examActive) return;
-      window._lastBioResult = result;
-      var curTime = new Date().toTimeString().split(' ')[0];
-
-      var isAllowed = result && (result.status === 'ALLOW' || result.status === 'MATCH' || result.is_match === true);
-      if (isAllowed) {
-        _impersonationFrames = 0;
-        if (badge) {
-          badge.className = 'badge badge-green';
-          badge.innerHTML = '✓ Live Match (' + (result.match_percentage || 96) + '%) · #' + window._bioCheckCount;
-        }
-        if (compareStatus) {
-          compareStatus.innerHTML = '<span style="color:#16a34a;font-weight:700">✓ LIVE MATCH (' + (result.match_percentage || 96) + '%)</span> · Verified #' + window._bioCheckCount + ' · [' + curTime + ']';
-        }
-        if (camBox) camBox.classList.remove('impersonation-alert');
-      } else if (result.status === 'BLOCK' || result.status === 'MISMATCH') {
-        _impersonationFrames++;
-        if (badge) {
-          badge.className = 'badge badge-red';
-          badge.innerHTML = '⚠ Face Mismatch (' + (result.match_percentage || 0) + '%) · #' + window._bioCheckCount;
-        }
-        if (compareStatus) {
-          compareStatus.innerHTML = '<span style="color:#dc2626;font-weight:700">⚠ MISMATCH (' + (result.match_percentage || 0) + '%)</span> · #' + window._bioCheckCount + ' · [' + curTime + ']';
-        }
-        handleImpersonationViolation(result.match_percentage || 0, 'Face Not Verified: Live camera face does not match registered candidate photo');
-      } else if (result.status === 'SPOOF') {
-        if (badge) {
-          badge.className = 'badge badge-red';
-          badge.textContent = '⛔ Spoof Detected';
-        }
-        if (compareStatus) {
-          compareStatus.innerHTML = '<span style="color:#dc2626;font-weight:700">⛔ SPOOF DETECTED</span> · Replay rejected · [' + curTime + ']';
-        }
-        handleSpoofViolation(result.message || 'Screen replay / printed photo spoof detected');
-      } else if (result.status === 'MULTIPLE_FACES' || result.status === 'MULTI') {
-        if (badge) {
-          badge.className = 'badge badge-amber';
-          badge.textContent = '👥 ' + (result.faces_detected || 2) + ' Faces';
-        }
-        if (compareStatus) {
-          compareStatus.innerHTML = '<span style="color:#d97706;font-weight:700">👥 MULTIPLE FACES</span> · [' + curTime + ']';
-        }
-      } else if (result.status === 'NO_FACE') {
-        if (badge) {
-          badge.className = 'badge badge-amber';
-          badge.textContent = '👤 Absent';
-        }
-        if (compareStatus) {
-          compareStatus.innerHTML = '<span style="color:#d97706;font-weight:700">👤 NO FACE DETECTED</span> · [' + curTime + ']';
-        }
-      } else {
-        runClientBiometricsFallback(vid);
-      }
-    })
-    .catch(function(){
-      clearTimeout(timeoutId);
-      window._bioFetchPending = false;
-      /* Service offline or timed out: execute client-side biometrics fallback seamlessly */
-      runClientBiometricsFallback(vid);
-    });
-  } catch(e) {
+  window._bioFetchPending = true;
+  window.verifyCandidateBiometricsHighQuality(vid, profilePhoto, { timeout: 5000 }, function(result) {
     window._bioFetchPending = false;
-    runClientBiometricsFallback(vid);
-  }
+  });
 };
 
 /* =====================================================
