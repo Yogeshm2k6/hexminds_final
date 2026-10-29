@@ -2584,7 +2584,7 @@ function runMLDetection(vid) {
   var facePromise = _blazefaceModel
     ? _blazefaceModel.estimateFaces(_faceDetectCanvas, false /* returnTensors */)
     : Promise.resolve(null);
-  var objPromise = _cocoSsdModel ? _cocoSsdModel.detect(vid) : Promise.resolve(null);
+  var objPromise = _cocoSsdModel ? _cocoSsdModel.detect(_faceDetectCanvas || vid, 20, 0.22) : Promise.resolve(null);
 
   Promise.all([facePromise, objPromise]).then(function(results) {
     var faces = results[0];
@@ -2617,27 +2617,24 @@ function runMLDetection(vid) {
 
     /* Gaze / look-away check — only when exactly 1 face is present */
     if (consensus === 1 && faces && faces.length === 1) {
-      var f = faces[0];
-      var tl = f.topLeft, br = f.bottomRight;
-      if (tl && br && f.landmarks && f.landmarks.length >= 3) {
-        var fw = br[0] - tl[0];
-        var fh = br[1] - tl[1];
-        var cx = (tl[0] + br[0]) / 2;
-        var cy = (tl[1] + br[1]) / 2;
-        var rEye = f.landmarks[0], lEye = f.landmarks[1], nose = f.landmarks[2];
-        var noseDx = (nose[0] - cx) / Math.max(1, fw);
-        var noseDy = (nose[1] - cy) / Math.max(1, fh);
-        var eyeDist = Math.abs(rEye[0] - lEye[0]) / Math.max(1, fw);
-        /* Looking away: nose horizontally far from center, vertically tilted, or eyes squeezed (head turn) */
-        var eyeMidX = (rEye[0] + lEye[0]) / 2;
-        var eyeMidY = (rEye[1] + lEye[1]) / 2;
-        var eyeDistTrue = Math.max(1, Math.hypot(rEye[0] - lEye[0], rEye[1] - lEye[1]));
-        var noseOffsetH = (nose[0] - eyeMidX) / eyeDistTrue;
-        var noseOffsetV = (nose[1] - eyeMidY) / eyeDistTrue;
-        var lookingAway = Math.abs(noseOffsetH) > 0.40 || noseOffsetV < 0.20 || noseOffsetV > 1.15;
-        checkGazeAway(lookingAway);
+      if (typeof window.estimateAdvancedGaze === 'function') {
+        var adv = window.estimateAdvancedGaze(faces[0], _faceDetectCtx, _faceDetectCanvas);
+        checkGazeAway(adv.isDiverted);
       } else {
-        checkGazeAway(false);
+        var f = faces[0];
+        var tl = f.topLeft, br = f.bottomRight;
+        if (tl && br && f.landmarks && f.landmarks.length >= 3) {
+          var rEye = f.landmarks[0], lEye = f.landmarks[1], nose = f.landmarks[2];
+          var eyeMidX = (rEye[0] + lEye[0]) / 2;
+          var eyeMidY = (rEye[1] + lEye[1]) / 2;
+          var eyeDistTrue = Math.max(1, Math.hypot(rEye[0] - lEye[0], rEye[1] - lEye[1]));
+          var noseOffsetH = (nose[0] - eyeMidX) / eyeDistTrue;
+          var noseOffsetV = (nose[1] - eyeMidY) / eyeDistTrue;
+          var lookingAway = Math.abs(noseOffsetH) > 0.40 || noseOffsetV < 0.20 || noseOffsetV > 1.15;
+          checkGazeAway(lookingAway);
+        } else {
+          checkGazeAway(false);
+        }
       }
     } else {
       gazeAwayConsecutive = 0;
@@ -2652,7 +2649,7 @@ function checkPhoneInPredictions(preds) {
   if (!preds || phoneDetected || !examActive) return;
   var found = preds.filter(function(p) {
     var cls = (p.class || '').toLowerCase().trim();
-    return PHONE_CLASSES.indexOf(cls) !== -1 && p.score >= 0.30;
+    return PHONE_CLASSES.indexOf(cls) !== -1 && p.score >= 0.22;
   });
   if (found.length > 0) {
     var best = found.reduce(function(a,b){ return a.score > b.score ? a : b; });

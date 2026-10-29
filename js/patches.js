@@ -2400,14 +2400,14 @@ checkGazeAway = function(isAway) {
 
 // Override handlePhoneDetectedML to use the dynamic active exam code
 
-window.PHONE_CLASSES = ['cell phone', 'phone', 'telephone', 'mobile phone', 'remote'];
+window.PHONE_CLASSES = ['cell phone', 'phone', 'telephone', 'mobile phone', 'remote', 'electronic device', 'smart phone', 'tablet'];
 
 window.checkPhoneInPredictions = function(preds) {
   if (!preds || !examActive || phoneDetected) return;
-  var phoneKeywords = ['cell phone', 'phone', 'telephone', 'mobile phone', 'remote'];
+  var phoneKeywords = ['cell phone', 'phone', 'telephone', 'mobile phone', 'remote', 'electronic device', 'smart phone', 'tablet'];
   var found = preds.filter(function(p) {
     var cls = (p.class || '').toLowerCase().trim();
-    return phoneKeywords.indexOf(cls) !== -1 && p.score >= 0.28;
+    return phoneKeywords.indexOf(cls) !== -1 && p.score >= 0.22;
   });
   if (found.length > 0) {
     var best = found.reduce(function(a, b) { return a.score > b.score ? a : b; });
@@ -2420,12 +2420,14 @@ handlePhoneDetectedML = function(objClass, confidence) {
   phoneDetected = true;
   var camBox = document.getElementById('cam-box');
   if (camBox) camBox.classList.add('phone-detected');
-  var photo = captureViolationPhoto();
-  var label = objClass === 'cell phone' ? 'Mobile Phone' : ('Unauthorized Device (' + objClass + ')');
+  var photo = (typeof captureViolationPhoto === 'function') ? captureViolationPhoto() : '';
+  var label = (objClass === 'cell phone' || objClass === 'phone' || objClass === 'mobile phone')
+    ? 'Mobile Phone'
+    : ('Unauthorized Device (' + objClass + ')');
   
   var examCode = 'CS101';
   if (typeof currentExamId !== 'undefined' && currentExamId) {
-    var activeEx = studentExams.find(function(e){ return e.id === currentExamId; }) || EXAMS.find(function(e){ return e.id === currentExamId; });
+    var activeEx = (studentExams || []).find(function(e){ return String(e.id) === String(currentExamId); }) || (EXAMS || []).find(function(e){ return String(e.id) === String(currentExamId); });
     if (activeEx && activeEx.code) examCode = activeEx.code;
   }
   
@@ -2433,8 +2435,8 @@ handlePhoneDetectedML = function(objClass, confidence) {
     type: label + ' Detected',
     time: new Date().toLocaleTimeString(),
     exam: examCode,
-    severity: 'high',
-    desc: label + ' detected in camera frame (AI confidence: ' + confidence + '%). Exam auto-submitted per policy.',
+    severity: 'critical',
+    desc: label + ' detected in camera frame (AI confidence: ' + confidence + '%). Exam auto-submitted immediately.',
     photo: photo
   };
   sessionViolations.push(v);
@@ -2442,15 +2444,23 @@ handlePhoneDetectedML = function(objClass, confidence) {
   if (currentStudent.name && LIVE_SESSIONS[currentStudent.name]) {
     LIVE_SESSIONS[currentStudent.name].violations.push(v);
   }
-  updateSuspicionScore(35);
+  updateSuspicionScore(100);
   var vc = document.getElementById('viol-count'); if (vc) vc.textContent = violationCount;
-  escalateProctorBar(label + ' Detected');
+  escalateProctorBar('⛔ ' + label.toUpperCase() + ' DETECTED — AUTO SUBMITTING');
   showViolationAlert('📵 ' + label + ' Detected — Auto-Submitting!',
-    label + ' detected in your camera (AI confidence: ' + confidence + '%). Critical violation. Exam submitting in 5 seconds.', true);
-  startAutoSubmitCountdown(label + ' detected in camera');
+    label + ' detected in your camera (AI confidence: ' + confidence + '%). Critical violation. Exam is being automatically submitted immediately.', true);
 
   /* Save to DB */
-  recordPersistentViolation(currentStudent.name || 'Unknown', v);
+  if (typeof recordPersistentViolation === 'function') {
+    recordPersistentViolation(currentStudent.name || 'Unknown', v);
+  }
+
+  // Immediately start auto-submit countdown
+  if (typeof startAutoSubmitCountdown === 'function') {
+    startAutoSubmitCountdown(label + ' detected in camera');
+  } else {
+    submitExam(true);
+  }
 };
 
 // Proctor Simulation Controllers
@@ -3105,6 +3115,211 @@ function setupCamHUD(vid) {
   }
 }
 
+// Advanced Multi-Modal 3D Head Pose and Eye Pupil/Iris Gaze Estimation
+window.estimateAdvancedGaze = function(face, ctx, canvas) {
+  if (!face || !face.landmarks || face.landmarks.length < 3) {
+    return {
+      text: 'Looking Center',
+      isDiverted: false,
+      yaw: 0,
+      pitch: 0,
+      roll: 0,
+      vector: [0, 0]
+    };
+  }
+
+  var lm = face.landmarks;
+  var rEye = lm[0]; // Right Eye [x, y]
+  var lEye = lm[1]; // Left Eye [x, y]
+  var nose = lm[2]; // Nose Tip [x, y]
+  var mouth = lm.length >= 4 ? lm[3] : [nose[0], nose[1] + Math.max(15, nose[1] - (rEye[1] + lEye[1]) / 2)];
+  var rEar = lm.length >= 5 ? lm[4] : null;
+  var lEar = lm.length >= 6 ? lm[5] : null;
+
+  // 1. ROLL (Head lateral tilt in degrees)
+  var dEyeX = lEye[0] - rEye[0];
+  var dEyeY = lEye[1] - rEye[1];
+  var eyeDist = Math.max(1, Math.hypot(dEyeX, dEyeY));
+  var rollRad = Math.atan2(dEyeY, dEyeX);
+  var rollDeg = rollRad * (180 / Math.PI);
+
+  // 2. YAW (Head rotation left/right in degrees)
+  var eyeMidX = (rEye[0] + lEye[0]) / 2;
+  var eyeMidY = (rEye[1] + lEye[1]) / 2;
+  var rawNoseRatioX = (nose[0] - eyeMidX) / eyeDist;
+
+  var earAsymmetry = 0;
+  if (rEar && lEar) {
+    var dLeft = Math.hypot(lEar[0] - lEye[0], lEar[1] - lEye[1]);
+    var dRight = Math.hypot(rEar[0] - rEye[0], rEar[1] - rEye[1]);
+    if (dLeft + dRight > 1) {
+      earAsymmetry = (dLeft - dRight) / (dLeft + dRight);
+    }
+  }
+  var rawYaw = (rawNoseRatioX * 68) + (earAsymmetry * 32);
+
+  // 3. PITCH (Head nod up/down in degrees)
+  var upperHeight = Math.max(1, nose[1] - eyeMidY);
+  var lowerHeight = Math.max(1, mouth[1] - nose[1]);
+  var totalHeight = Math.max(1, mouth[1] - eyeMidY);
+  var verticalRatio = (upperHeight - lowerHeight) / totalHeight;
+  var nosePitchOffset = (nose[1] - eyeMidY) / eyeDist;
+  var rawPitch = ((nosePitchOffset - 0.58) * 65) + (verticalRatio * 25);
+
+  // 4. IRIS / PUPIL CENTROID INTENSITY TRACKING
+  // Detects if eyes glance sideways off-screen even if head remains forward
+  var irisDeviation = 0;
+  if (ctx && canvas) {
+    try {
+      var cropRadiusW = Math.max(6, Math.min(18, Math.round(eyeDist * 0.18)));
+      var cropRadiusH = Math.max(4, Math.min(12, Math.round(eyeDist * 0.12)));
+
+      var getEyePupilOffset = function(eyePt) {
+        var ex = Math.round(eyePt[0]);
+        var ey = Math.round(eyePt[1]);
+        var sx = Math.max(0, ex - cropRadiusW);
+        var sy = Math.max(0, ey - cropRadiusH);
+        var sw = Math.min(canvas.width - sx, cropRadiusW * 2);
+        var sh = Math.min(canvas.height - sy, cropRadiusH * 2);
+        if (sw <= 0 || sh <= 0) return 0;
+
+        var img = ctx.getImageData(sx, sy, sw, sh);
+        var d = img.data;
+        var minLum = 255;
+        for (var i = 0; i < d.length; i += 4) {
+          var lum = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+          if (lum < minLum) minLum = lum;
+        }
+
+        var threshold = minLum + 45;
+        var sumWeight = 0;
+        var sumWeightedX = 0;
+        for (var py = 0; py < sh; py++) {
+          for (var px = 0; px < sw; px++) {
+            var idx = (py * sw + px) * 4;
+            var l = 0.299 * d[idx] + 0.587 * d[idx + 1] + 0.114 * d[idx + 2];
+            if (l <= threshold) {
+              var weight = threshold - l + 1;
+              sumWeight += weight;
+              sumWeightedX += (px - cropRadiusW) * weight;
+            }
+          }
+        }
+        return sumWeight > 0 ? (sumWeightedX / sumWeight) / cropRadiusW : 0;
+      };
+
+      var rIrisShift = getEyePupilOffset(rEye);
+      var lIrisShift = getEyePupilOffset(lEye);
+      irisDeviation = (rIrisShift + lIrisShift) / 2;
+    } catch (e) {}
+  }
+
+  // Composite Effective Gaze
+  var effectiveYaw = rawYaw + (irisDeviation * 26);
+  var effectivePitch = rawPitch;
+  var effectiveRoll = rollDeg;
+
+  // Exponential Moving Average (EMA) smoothing for stability
+  if (typeof window._gazeSmoothedYaw === 'undefined' || window._gazeSmoothedYaw === null) {
+    window._gazeSmoothedYaw = effectiveYaw;
+    window._gazeSmoothedPitch = effectivePitch;
+    window._gazeSmoothedRoll = effectiveRoll;
+  } else {
+    var alpha = 0.35;
+    window._gazeSmoothedYaw = alpha * effectiveYaw + (1 - alpha) * window._gazeSmoothedYaw;
+    window._gazeSmoothedPitch = alpha * effectivePitch + (1 - alpha) * window._gazeSmoothedPitch;
+    window._gazeSmoothedRoll = alpha * effectiveRoll + (1 - alpha) * window._gazeSmoothedRoll;
+  }
+
+  var sYaw = window._gazeSmoothedYaw;
+  var sPitch = window._gazeSmoothedPitch;
+  var sRoll = window._gazeSmoothedRoll;
+
+  // Auto-Calibration
+  if (!faceCalibrated) {
+    calibrationFrames.push({ yaw: sYaw, pitch: sPitch, roll: sRoll });
+    var progress = Math.min(100, Math.round((calibrationFrames.length / 6) * 100));
+    var fmsLabel = document.getElementById('face-model-s');
+    if (fmsLabel) {
+      fmsLabel.innerHTML = '<span style="color:var(--amber);font-weight:700">⚖ Calibrating 3D Gaze Geometry: ' + progress + '%</span>';
+    }
+    if (calibrationFrames.length >= 6) {
+      var sumY = 0, sumP = 0, sumR = 0;
+      calibrationFrames.forEach(function(cf) {
+        sumY += cf.yaw;
+        sumP += cf.pitch;
+        sumR += cf.roll;
+      });
+      calibratedBaselines = {
+        yaw: sumY / calibrationFrames.length,
+        pitch: sumP / calibrationFrames.length,
+        roll: sumR / calibrationFrames.length
+      };
+      faceCalibrated = true;
+    }
+    return {
+      text: 'Calibrating...',
+      isDiverted: false,
+      yaw: Math.round(sYaw),
+      pitch: Math.round(sPitch),
+      roll: Math.round(sRoll),
+      vector: [0, 0],
+      nosePt: [nose[0], nose[1]],
+      rEye: [rEye[0], rEye[1]],
+      lEye: [lEye[0], lEye[1]]
+    };
+  }
+
+  // Deviation from calibrated neutral seated posture
+  var base = calibratedBaselines || { yaw: 0, pitch: 0, roll: 0 };
+  var diffYaw = sYaw - (base.yaw || 0);
+  var diffPitch = sPitch - (base.pitch || 0);
+  var diffRoll = sRoll - (base.roll || 0);
+
+  // Accurate classification thresholds for screen monitoring
+  var headStatusText = 'Looking Center';
+  var isDiverted = false;
+
+  if (diffYaw < -18) {
+    headStatusText = 'Turned Left';
+    isDiverted = true;
+  } else if (diffYaw > 18) {
+    headStatusText = 'Turned Right';
+    isDiverted = true;
+  } else if (diffPitch > 18) {
+    headStatusText = 'Looking Down';
+    isDiverted = true;
+  } else if (diffPitch < -16) {
+    headStatusText = 'Looking Up';
+    isDiverted = true;
+  } else if (Math.abs(diffRoll) > 18) {
+    headStatusText = 'Head Tilted';
+    isDiverted = true;
+  } else if (Math.abs(irisDeviation) > 0.32) {
+    headStatusText = irisDeviation > 0 ? 'Eyes Averted Right' : 'Eyes Averted Left';
+    isDiverted = true;
+  }
+
+  var radYaw = (diffYaw * Math.PI) / 180;
+  var radPitch = (diffPitch * Math.PI) / 180;
+  var vecLen = 38;
+  var vx = Math.sin(radYaw) * vecLen;
+  var vy = Math.sin(radPitch) * vecLen;
+
+  return {
+    text: headStatusText,
+    isDiverted: isDiverted,
+    yaw: Math.round(diffYaw),
+    pitch: Math.round(diffPitch),
+    roll: Math.round(diffRoll),
+    irisOffset: Math.round(irisDeviation * 100),
+    vector: [vx, vy],
+    nosePt: [nose[0], nose[1]],
+    rEye: [rEye[0], rEye[1]],
+    lEye: [lEye[0], lEye[1]]
+  };
+};
+
 // Continuous Face HUD Canvas Drawer
 window.drawFaceTrackingHUD = function() {
   var hud = document.getElementById('cam-face-hud');
@@ -3184,8 +3399,6 @@ window.drawFaceTrackingHUD = function() {
       ctx.strokeStyle = (consensus > 1 && idx > 0) ? '#ef4444' : boxColor;
       ctx.lineWidth = 2.5;
       
-      // ctx.shadowBlur = 0;
-      
       // Top-Left
       ctx.beginPath(); ctx.moveTo(bx, by + cornerLen); ctx.lineTo(bx, by); ctx.lineTo(bx + cornerLen, by); ctx.stroke();
       // Top-Right
@@ -3195,9 +3408,7 @@ window.drawFaceTrackingHUD = function() {
       // Bottom-Right
       ctx.beginPath(); ctx.moveTo(bx + bw - cornerLen, by + bh); ctx.lineTo(bx + bw, by + bh); ctx.lineTo(bx + bw, by + bh - cornerLen); ctx.stroke();
       
-      ctx.shadowBlur = 0;
-      
-      // Landmarks
+      // Facial Landmarks
       if (f.landmarks && f.landmarks.length) {
         ctx.fillStyle = '#38bdf8';
         f.landmarks.forEach(function(lm) {
@@ -3206,19 +3417,47 @@ window.drawFaceTrackingHUD = function() {
           ctx.fill();
         });
       }
+
+      // 3D Gaze Orientation Ray & Target Reticle
+      if (data.gazeStatus && data.gazeStatus.vector && data.gazeStatus.nosePt) {
+        var nx = data.gazeStatus.nosePt[0];
+        var ny = data.gazeStatus.nosePt[1];
+        var vx = data.gazeStatus.vector[0];
+        var vy = data.gazeStatus.vector[1];
+        var rayColor = data.gazeStatus.isDiverted ? '#f59e0b' : '#00f2fe';
+
+        ctx.strokeStyle = rayColor;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(nx, ny);
+        ctx.lineTo(nx + vx, ny + vy);
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.arc(nx + vx, ny + vy, 5, 0, Math.PI * 2);
+        ctx.stroke();
+
+        ctx.fillStyle = rayColor;
+        ctx.beginPath();
+        ctx.arc(nx + vx, ny + vy, 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
       
       // Floating Target Label
       var tagText = (consensus > 1 && idx > 0)
         ? '⚠ MULTIPLE PERSON #' + (idx + 1)
         : ((isMatch ? '🎯 ID VERIFIED ' : '⚠ MISMATCH ') + (bio.match_percentage || 96) + '%');
       
-      var gazeText = (data.gazeStatus && data.gazeStatus.text) ? ('GAZE: ' + data.gazeStatus.text.toUpperCase()) : 'GAZE: OK';
+      var yawStr = (data.gazeStatus && typeof data.gazeStatus.yaw !== 'undefined') ? ((data.gazeStatus.yaw >= 0 ? '+' : '') + data.gazeStatus.yaw + '°') : '';
+      var pitchStr = (data.gazeStatus && typeof data.gazeStatus.pitch !== 'undefined') ? ((data.gazeStatus.pitch >= 0 ? '+' : '') + data.gazeStatus.pitch + '°') : '';
+      var anglesStr = (yawStr && pitchStr) ? (' [' + yawStr + ', ' + pitchStr + ']') : '';
+      var gazeText = 'GAZE: ' + ((data.gazeStatus && data.gazeStatus.text) ? data.gazeStatus.text.toUpperCase() : 'OK') + anglesStr;
       
       ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
-      ctx.fillRect(bx, Math.max(24, by - 24), Math.max(120, bw), 22);
+      ctx.fillRect(bx, Math.max(24, by - 24), Math.max(130, bw), 22);
       ctx.strokeStyle = ctx.strokeStyle;
       ctx.lineWidth = 1;
-      ctx.strokeRect(bx, Math.max(24, by - 24), Math.max(120, bw), 22);
+      ctx.strokeRect(bx, Math.max(24, by - 24), Math.max(130, bw), 22);
       
       ctx.fillStyle = (consensus > 1 && idx > 0) ? '#ef4444' : (isMatch ? '#38bdf8' : '#f87171');
       ctx.font = 'bold 8px "JetBrains Mono", monospace';
@@ -3248,17 +3487,36 @@ window.drawFaceTrackingHUD = function() {
     data.phonePreds.forEach(function(p) {
       if (!p.bbox) return;
       var px = p.bbox[0], py = p.bbox[1], pw = p.bbox[2], ph = p.bbox[3];
-      ctx.strokeStyle = '#ef4444';
-      ctx.lineWidth = 2;
+      var pAlpha = 0.7 + 0.3 * Math.sin(Date.now() / 150);
+      ctx.strokeStyle = 'rgba(239, 68, 68, ' + pAlpha + ')';
+      ctx.lineWidth = 3;
       ctx.strokeRect(px, py, pw, ph);
+
+      var clen = Math.min(14, pw * 0.3);
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(px, py + clen); ctx.lineTo(px, py); ctx.lineTo(px + clen, py); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(px + pw - clen, py); ctx.lineTo(px + pw, py); ctx.lineTo(px + pw, py + clen); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(px, py + ph - clen); ctx.lineTo(px, py + ph); ctx.lineTo(px + clen, py + ph); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(px + pw - clen, py + ph); ctx.lineTo(px + pw, py + ph); ctx.lineTo(px + pw, py + ph - clen); ctx.stroke();
       
-      ctx.fillStyle = 'rgba(239, 68, 68, 0.9)';
-      ctx.fillRect(px, Math.max(24, py - 16), pw, 16);
+      var conf = Math.round((p.score || 0.8) * 100);
+      ctx.fillStyle = 'rgba(239, 68, 68, 0.95)';
+      ctx.fillRect(px, Math.max(24, py - 18), Math.max(160, pw), 18);
       ctx.fillStyle = '#ffffff';
       ctx.font = 'bold 8px "JetBrains Mono", monospace';
-      ctx.fillText('📵 MOBILE PHONE DETECTED', px + 3, Math.max(35, py - 4));
+      ctx.fillText('📵 MOBILE PHONE (' + conf + '%) AUTO-SUBMIT', px + 4, Math.max(36, py - 5));
     });
   }
+
+  // 5. Bottom HUD Status
+  ctx.fillStyle = 'rgba(15, 23, 42, 0.75)';
+  ctx.fillRect(0, h - 18, w, 18);
+  ctx.fillStyle = '#94a3b8';
+  ctx.font = '8px "JetBrains Mono", monospace';
+  var phoneStatus = (data.phonePreds && data.phonePreds.length) ? '⚠ DETECTED' : 'CLEAR';
+  var gazeWarns = (window.gazeWarningCount || 0) + '/' + (window.MAX_GAZE_WARNINGS || 25);
+  ctx.fillText('GAZE WARNS: ' + gazeWarns + ' · PHONE: ' + phoneStatus, 6, h - 6);
 };
 
 // Override initFaceDetection to run continuous high-frequency face & object detection loop
@@ -3310,11 +3568,13 @@ initFaceDetection = function(vid) {
 
     // Auto-load COCO-SSD dynamically if not yet ready
 function ensureCocoSsdLoaded() {
-  if (!_cocoSsdModel && typeof cocoSsd !== 'undefined' && !window._cocoSsdLoading) {
+  var modelRef = (typeof _cocoSsdModel !== 'undefined') ? _cocoSsdModel : (window._cocoSsdModel || null);
+  if (!modelRef && typeof cocoSsd !== 'undefined' && !window._cocoSsdLoading) {
     window._cocoSsdLoading = true;
     cocoSsd.load({ base: 'lite_mobilenet_v2' }).catch(function(){ return cocoSsd.load(); })
       .then(function(m){
-        _cocoSsdModel = m;
+        if (typeof _cocoSsdModel !== 'undefined') _cocoSsdModel = m;
+        window._cocoSsdModel = m;
         window._cocoSsdLoading = false;
         console.log('✓ COCO-SSD phone detection model ready');
         var fms = document.getElementById('face-model-s');
@@ -3369,9 +3629,11 @@ runMLDetection = function(vid, onDone) {
           }])
       );
 
-  // Check phone on lightweight 320x240 canvas every 3rd frame (~2.2s) instead of full video (12x fewer pixels!)
-  var shouldCheckPhone = _cocoSsdModel && (window._hudFrameCount % 2 === 0);
-  var objPromise = shouldCheckPhone ? _cocoSsdModel.detect(_faceDetectCanvas) : Promise.resolve(window._lastPhonePreds || null);
+  // Check phone on lightweight 320x240 canvas with minScore = 0.22 (ensures all mobile devices are returned)
+  var shouldCheckPhone = _cocoSsdModel !== null;
+  var objPromise = shouldCheckPhone
+    ? _cocoSsdModel.detect(_faceDetectCanvas, 20, 0.22)
+    : Promise.resolve(window._lastPhonePreds || null);
 
   // Invoke candidate biometric verification (throttled every 8s internally)
   if (typeof checkContinuousIdentityVerification === 'function') {
@@ -3397,7 +3659,7 @@ runMLDetection = function(vid, onDone) {
       personCount = preds.filter(function(p){ return p.class === 'person' && p.score >= 0.60; }).length;
       phonePreds = preds.filter(function(p){
         var cls = (p.class || '').toLowerCase().trim();
-        return (cls === 'cell phone' || cls === 'phone' || cls === 'mobile phone' || cls === 'telephone') && p.score >= 0.35;
+        return (cls === 'cell phone' || cls === 'phone' || cls === 'mobile phone' || cls === 'telephone' || cls === 'remote' || cls === 'electronic device' || cls === 'smart phone' || cls === 'tablet') && p.score >= 0.22;
       });
       checkPhoneInPredictions(preds);
     }
@@ -3405,99 +3667,30 @@ runMLDetection = function(vid, onDone) {
     var consensus = Math.max(faceCount, personCount);
     if (faces !== null || preds !== null) applyFaceResult(consensus, false);
 
-    var gazeStatus = { text: 'Looking Straight', isDiverted: false };
+    var gazeStatus = { text: 'Looking Center', isDiverted: false };
 
-// Dynamic head movement estimation (Robust & natural tolerance)
+    // Advanced 3D Multi-Modal Head Pose & Iris Gaze Estimation
     if (consensus === 1 && validFaces && validFaces.length === 1) {
       var f = validFaces[0];
-      var tl = f.topLeft, br = f.bottomRight;
-      if (tl && br && f.landmarks && f.landmarks.length >= 3) {
-        var fw = br[0] - tl[0];
-        var fh = br[1] - tl[1];
-        var rEye = f.landmarks[0];
-        var lEye = f.landmarks[1];
-        var nose = f.landmarks[2];
-        
-        var eyeMidX = (rEye[0] + lEye[0]) / 2;
-        var eyeMidY = (rEye[1] + lEye[1]) / 2;
-        var eyeDist = Math.max(1, Math.hypot(rEye[0] - lEye[0], rEye[1] - lEye[1]));
-        
-        // Normalized horizontal yaw offset (nose relative to eye midpoint)
-        var rawNoseOffsetX = (nose[0] - eyeMidX) / eyeDist;
-        // Normalized vertical pitch offset
-        var rawNoseOffsetY = (nose[1] - eyeMidY) / eyeDist;
-        
-        // Apply Exponential Moving Average (EMA) smoothing (alpha = 0.25)
-        if (smoothedNoseOffsetX === null) {
-          smoothedNoseOffsetX = rawNoseOffsetX;
-          smoothedNoseOffsetY = rawNoseOffsetY;
-        } else {
-          var alpha = 0.25;
-          smoothedNoseOffsetX = alpha * rawNoseOffsetX + (1 - alpha) * smoothedNoseOffsetX;
-          smoothedNoseOffsetY = alpha * rawNoseOffsetY + (1 - alpha) * smoothedNoseOffsetY;
-        }
-        
-        var fmsLabel = document.getElementById('face-model-s');
-        
-        // Calibration phase (first 8 frames)
-        if (!faceCalibrated) {
-          calibrationFrames.push({ noseOffsetX: smoothedNoseOffsetX, noseOffsetY: smoothedNoseOffsetY });
-          var progress = Math.round((calibrationFrames.length / 8) * 100);
-          if (fmsLabel) {
-            fmsLabel.innerHTML = '<span style="color:var(--amber);font-weight:700">⚖ Calibrating natural posture: ' + progress + '%</span>';
-          }
-          
-          if (calibrationFrames.length >= 8) {
-            var sumX = 0, sumY = 0;
-            calibrationFrames.forEach(function(cf){
-              sumX += cf.noseOffsetX;
-              sumY += cf.noseOffsetY;
-            });
-            calibratedBaselines = {
-              noseOffsetX: sumX / calibrationFrames.length,
-              noseOffsetY: sumY / calibrationFrames.length
-            };
-            faceCalibrated = true;
-          }
-          checkGazeAway(false);
-        } else {
-          // Deviation from calibrated natural baseline
-          var diffYaw = smoothedNoseOffsetX - calibratedBaselines.noseOffsetX;
-          var diffPitch = smoothedNoseOffsetY - calibratedBaselines.noseOffsetY;
-          
-          var headStatusText = 'Looking straight';
-          var lookingAway = false;
-          
-          // Generous thresholds that allow full, comfortable reading of screen without false alarms
-          if (diffYaw < -0.38) {
-            headStatusText = 'Turned Left';
-            lookingAway = true;
-          } else if (diffYaw > 0.38) {
-            headStatusText = 'Turned Right';
-            lookingAway = true;
-          } else if (diffPitch > 0.38) {
-            headStatusText = 'Looking Down';
-            lookingAway = true;
-          } else if (diffPitch < -0.32) {
-            headStatusText = 'Looking Up';
-            lookingAway = true;
-          }
-          
-          gazeStatus = { text: headStatusText, isDiverted: lookingAway };
-          
-          if (fmsLabel) {
-            var bioMatch = window._lastBioResult ? (window._lastBioResult.match_percentage || 96) : 96;
-            if (lookingAway) {
-              fmsLabel.innerHTML = '🔴 Continuous AI: <strong style="color:var(--red)">' + headStatusText + '</strong> · Warning ' + (window.gazeWarningCount || 0) + '/' + (window.MAX_GAZE_WARNINGS || 25);
-            } else {
-              fmsLabel.innerHTML = '🟢 Continuous AI: <strong style="color:var(--green)">' + headStatusText + '</strong> · Match ' + bioMatch + '% · Warnings ' + (window.gazeWarningCount || 0) + '/' + (window.MAX_GAZE_WARNINGS || 25);
-            }
-          }
-          checkGazeAway(lookingAway);
-        }
+      if (typeof window.estimateAdvancedGaze === 'function') {
+        gazeStatus = window.estimateAdvancedGaze(f, _faceDetectCtx, _faceDetectCanvas);
       } else {
-        checkGazeAway(false);
+        gazeStatus = { text: 'Looking Center', isDiverted: false, yaw: 0, pitch: 0, vector: [0, 0] };
       }
+
+      var fmsLabel = document.getElementById('face-model-s');
+      if (fmsLabel) {
+        var bioMatch = window._lastBioResult ? (window._lastBioResult.match_percentage || 96) : 96;
+        var anglesStr = (typeof gazeStatus.yaw !== 'undefined' && typeof gazeStatus.pitch !== 'undefined')
+          ? (' [' + (gazeStatus.yaw >= 0 ? '+' : '') + gazeStatus.yaw + '°, ' + (gazeStatus.pitch >= 0 ? '+' : '') + gazeStatus.pitch + '°]')
+          : '';
+        if (gazeStatus.isDiverted) {
+          fmsLabel.innerHTML = '🔴 Continuous AI: <strong style="color:var(--amber)">' + gazeStatus.text + anglesStr + '</strong> · Warning ' + (window.gazeWarningCount || 0) + '/' + (window.MAX_GAZE_WARNINGS || 25);
+        } else {
+          fmsLabel.innerHTML = '🟢 Continuous AI: <strong style="color:var(--green)">' + gazeStatus.text + anglesStr + '</strong> · Match ' + bioMatch + '% · Warnings ' + (window.gazeWarningCount || 0) + '/' + (window.MAX_GAZE_WARNINGS || 25);
+        }
+      }
+      checkGazeAway(gazeStatus.isDiverted);
     } else {
       gazeAwayConsecutive = 0;
       var fmsLabel = document.getElementById('face-model-s');
@@ -5651,7 +5844,16 @@ window.restoreActiveSession = function() {
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', function(){
     setTimeout(window.restoreActiveSession, 60);
+    setTimeout(function() {
+      if (typeof ensureCocoSsdLoaded === 'function') ensureCocoSsdLoaded();
+      if (typeof loadMLModels === 'function') loadMLModels(function(){});
+    }, 250);
   });
 } else {
   setTimeout(window.restoreActiveSession, 60);
+  setTimeout(function() {
+    if (typeof ensureCocoSsdLoaded === 'function') ensureCocoSsdLoaded();
+    if (typeof loadMLModels === 'function') loadMLModels(function(){});
+  }, 250);
 }
+
