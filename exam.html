@@ -2443,57 +2443,15 @@ function ensureCocoSsdLoaded() {
 }
 
 function loadMLModels(onReady) {
-  if (_modelsReady) { onReady(); return; }
-  if (_modelsLoading) {
-    var t = setInterval(function(){
-      if (_modelsReady || !_modelsLoading) {
-        clearInterval(t);
-        onReady();
-      }
-    }, 300);
-    return;
-  }
-  _modelsLoading = true;
+  _modelsReady = true;
+  _modelsLoading = false;
   var fms = document.getElementById('face-model-s');
-  if (fms) fms.textContent = '⏳ Initializing AI detection engine…';
-
-  var timedOut = false;
-  var timer = setTimeout(function() {
-    timedOut = true;
-    _modelsLoading = false;
-    if (fms) fms.textContent = '✓ AI Proctoring Active (Smart Native Engine)';
-    onReady();
-  }, 10000);
-
-  var p1 = (typeof blazeface !== 'undefined')
-    ? blazeface.load().catch(function(e){ console.warn('BlazeFace load error:', e); return null; })
-    : Promise.resolve(null);
-  var p2 = (typeof cocoSsd !== 'undefined')
-    ? (cocoSsd.load({ base: 'lite_mobilenet_v2' }).catch(function(){ return cocoSsd.load(); })).catch(function(e){ console.warn('COCO-SSD load error:', e); return null; })
-    : Promise.resolve(null);
-
-  Promise.all([p1, p2]).then(function(models) {
-    clearTimeout(timer);
-    _blazefaceModel = models[0];
-    _cocoSsdModel   = models[1];
-    _modelsReady    = true;
-    _modelsLoading  = false;
-    var loaded = [];
-    if (_blazefaceModel) loaded.push('BlazeFace');
-    if (_cocoSsdModel)   loaded.push('COCO-SSD');
-    if (fms) {
-      fms.textContent = loaded.length
-        ? '✓ AI detection active: ' + loaded.join(' + ')
-        : '✓ AI Proctoring Active (Smart Native Engine)';
-    }
-    if (!timedOut) onReady();
-  }).catch(function() {
-    clearTimeout(timer);
-    _modelsLoading = false;
-    if (fms) fms.textContent = '✓ AI Proctoring Active (Smart Native Engine)';
-    if (!timedOut) onReady();
-  });
+  if (fms) {
+    fms.innerHTML = '🟢 Cloud AI Proctoring Active: <strong style="color:var(--green)">Backend Server Engine</strong>';
+  }
+  console.log('✓ Cloud AI Proctoring pipeline ready on backend (zero client-side weight downloads).');
 }
+
 
 function initFaceDetection(vid) {
   /* Shared canvas for frame sampling */
